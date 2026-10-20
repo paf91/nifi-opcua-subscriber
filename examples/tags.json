@@ -1,0 +1,4 @@
+[
+  {"alias":"DemoSwitch","nodeId":"ns=2;s=Demo.Boolean","samplingIntervalMs":500,"queueSize":100,"discardOldest":true},
+  {"alias":"Server time","nodeId":"ns=0;i=2258"}
+]

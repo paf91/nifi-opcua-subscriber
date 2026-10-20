@@ -1,0 +1,26 @@
+stages: [test]
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+cache:
+  key: "maven-$CI_JOB_NAME"
+  paths: [.m2/repository/]
+.build:
+  stage: test
+  artifacts:
+    when: always
+    paths:
+      - nar/target/*.nar
+      - processors/target/surefire-reports/
+    reports:
+      junit: processors/target/surefire-reports/TEST-*.xml
+    expire_in: 30 days
+nifi1-java8:
+  extends: .build
+  image: maven:3.9.11-eclipse-temurin-8
+  script:
+    - mvn -B -ntp clean verify
+nifi2-java21:
+  extends: .build
+  image: maven:3.9.11-eclipse-temurin-21
+  script:
+    - mvn -B -ntp -Pnifi2 clean verify

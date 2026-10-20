@@ -1,0 +1,3 @@
+{
+  "DemoSwitch": "{\"nodeId\": \"ns=2;s=Demo.Boolean\", \"samplingIntervalMs\": 1000, \"queueSize\": 100, \"discardOldest\": true}"
+}

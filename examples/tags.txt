@@ -1,0 +1,4 @@
+# One complete NodeId per line; aliases are optional.
+# DemoSwitch is synthetic; Server time is a standard OPC UA node.
+DemoSwitch | ns=2;s=Demo.Boolean
+Server time | ns=0;i=2258

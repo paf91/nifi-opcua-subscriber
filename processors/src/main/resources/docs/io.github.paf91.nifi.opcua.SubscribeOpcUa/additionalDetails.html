@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>SubscribeOpcUa configuration examples</title></head>
+<body>
+<h2>Configuring tags</h2>
+<p>The following tags and addresses are fictional. Replace them with the complete NodeIds supplied by your OPC UA server administrator. They are not nodes exposed by the included demo server.</p>
+<table>
+<thead><tr><th>Alias</th><th>NodeId</th><th>Server data type</th></tr></thead>
+<tbody>
+<tr><td>Temperature</td><td>ns=2;s=Example.Tank.Temperature</td><td>Float</td></tr>
+<tr><td>Pressure</td><td>ns=2;s=Example.Pipe.Pressure</td><td>Double</td></tr>
+<tr><td>PumpRunning</td><td>ns=2;s=Example.Pump.Running</td><td>Boolean</td></tr>
+</tbody>
+</table>
+<h3>Bulk list</h3>
+<p>Paste one entry per line into <strong>Tags</strong>. Each entry may be a complete NodeId or an alias followed by a vertical bar and a NodeId.</p>
+<pre>Temperature | ns=2;s=Example.Tank.Temperature
+Pressure | ns=2;s=Example.Pipe.Pressure
+PumpRunning | ns=2;s=Example.Pump.Running</pre>
+<p>Use JSON when individual tags need different sampling intervals or monitored-item queue sizes:</p>
+<pre>[
+  {"alias":"Temperature","nodeId":"ns=2;s=Example.Tank.Temperature","samplingIntervalMs":1000,"queueSize":100},
+  {"alias":"PumpRunning","nodeId":"ns=2;s=Example.Pump.Running","samplingIntervalMs":250,"queueSize":200}
+]</pre>
+<h3>Individual properties</h3>
+<p>Alternatively, add a dynamic property named <strong>PumpRunning</strong> with value <code>ns=2;s=Example.Pump.Running</code>. Do not configure the same alias or NodeId twice across the bulk list and individual properties.</p>
+<h3>Types and connection settings</h3>
+<p>Data types are read from the server; do not append Float, Double or Boolean to the NodeId. Obtain the endpoint URL, username/password, client certificate and private key separately. The client and server must trust each other's certificates. Leave Application URI empty to derive it from the client certificate.</p>
+<h3>Included demo</h3>
+<p>The local demo exposes <code>DemoSwitch | ns=2;s=Demo.Boolean</code>. Its addresses are separate from the fictional examples above.</p>
+<h3>Delivery limits</h3>
+<p>Notifications are buffered in memory. Stop/Start in the same JVM retains pending records; a JVM restart loses them. Buffers are local to each node. A full buffer drops new notifications. Primary-node failover can produce gaps or duplicates; the processor does not recover historical values.</p>
+</body>
+</html>
