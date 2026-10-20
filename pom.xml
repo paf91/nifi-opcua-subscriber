@@ -14,7 +14,7 @@
     <milo.source>milo06</milo.source>
     <nar.plugin.version>1.5.1</nar.plugin.version>
     <junit.version>5.11.4</junit.version>
-    <netty.version>4.1.139.Final</netty.version>
+    <netty.version>4.2.19.Final</netty.version>
     <jackson.version>2.18.12</jackson.version>
     <bouncycastle.version>1.86</bouncycastle.version>
   </properties>
