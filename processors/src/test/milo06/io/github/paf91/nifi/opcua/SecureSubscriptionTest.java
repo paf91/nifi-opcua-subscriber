@@ -196,6 +196,30 @@ class SecureSubscriptionTest {
     }
 
     @Test
+    void logsRejectedNodeAndStatusFromRealSecureSubscription() {
+        TestRunner runner = ProcessorTest.configured(new SubscribeOpcUa());
+        runner.setProperty(SubscribeOpcUa.ENDPOINT, endpoint);
+        runner.setProperty(SubscribeOpcUa.CERTIFICATE, dir.resolve("client.der").toString());
+        runner.setProperty(SubscribeOpcUa.PRIVATE_KEY, dir.resolve("client.pem").toString());
+        runner.setProperty(SubscribeOpcUa.PKI, dir.resolve("pki").toString());
+        runner.setProperty(SubscribeOpcUa.PASSWORD, "test-password");
+        runner.setProperty("DemoSwitch", "ns=2;s=does-not-exist");
+        try {
+            runner.run(1, false, true);
+            assertEquals(1, runner.getLogger().getErrorMessages().size());
+            LogMessage failure = runner.getLogger().getErrorMessages().get(0);
+            String message = failure.toString();
+            assertTrue(message.contains("does-not-exist"), message);
+            assertTrue(message.contains("Bad_NodeIdUnknown"), message);
+            assertTrue(message.contains("0x80340000"), message);
+            assertFalse(message.contains("test-password"), message);
+            assertNull(failure.getThrowable());
+        } finally {
+            runner.shutdown();
+        }
+    }
+
+    @Test
     void rejectsMismatchedKeyAndApplicationUri() throws Exception {
         assertThrows(
                 IllegalArgumentException.class,

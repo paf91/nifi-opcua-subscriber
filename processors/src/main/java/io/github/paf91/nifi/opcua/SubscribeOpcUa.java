@@ -11,9 +11,12 @@ import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.processor.*;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
+import org.eclipse.milo.opcua.stack.core.UaExceptionStatus;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 
 import java.util.*;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.*;
 
 @Tags({"opcua", "opc", "subscription", "industrial", "iot"})
@@ -422,6 +425,33 @@ public class SubscribeOpcUa extends AbstractProcessor {
         accept(buffer, tag, value);
     }
 
+    private static String failureDescription(ProcessContext context, Throwable failure) {
+        StringJoiner details = new StringJoiner("; caused by ");
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Throwable cause = failure;
+                cause != null && seen.add(cause);
+                cause = cause.getCause()) {
+            if ((cause instanceof ExecutionException || cause instanceof CompletionException)
+                    && cause.getCause() != null) continue;
+            String detail = cause.getClass().getSimpleName();
+            if (cause instanceof UaExceptionStatus)
+                detail += " [" + ((UaExceptionStatus) cause).getStatusCode() + "]";
+            String message = cause.getMessage();
+            if (message != null && !message.isEmpty()) detail += ": " + message;
+            details.add(detail);
+        }
+        String description = details.toString();
+        List<String> passwords = new ArrayList<>();
+        for (PropertyDescriptor property : Arrays.asList(PASSWORD, KEY_PASSWORD)) {
+            String password = context.getProperty(property).getValue();
+            if (password != null && !password.isEmpty()) passwords.add(password);
+        }
+        // Redact whole secrets before their prefixes or any newline normalization.
+        passwords.sort(Comparator.comparingInt(String::length).reversed());
+        for (String password : passwords) description = description.replace(password, "[redacted]");
+        return description.replaceAll("[\\p{Cntrl}\\u2028\\u2029]", " ");
+    }
+
     @Override
     public void onTrigger(ProcessContext context, ProcessSession session) throws ProcessException {
         synchronized (lifecycle) {
@@ -459,7 +489,7 @@ public class SubscribeOpcUa extends AbstractProcessor {
                                 .error(
                                         "Could not establish OPC UA subscription ({}); retrying"
                                                 + " after configured delay",
-                                        new Object[] {e.getClass().getSimpleName()});
+                                        new Object[] {failureDescription(context, e)});
                         context.yield();
                     }
                 }

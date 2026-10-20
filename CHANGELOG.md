@@ -22,6 +22,10 @@
 - Java/XML formatting is normalized for review.
 - Jackson is aligned to 2.18.12 and Netty to 4.1.139.Final using BOMs, with Bouncy Castle aligned to 1.86 following dependency-advisory review.
 
+### Fixed
+
+- Subscription failure logs retain the rejected NodeId, OPC UA status and underlying cause, with configured passwords redacted.
+
 ### Migration
 
 Existing demo flows are not overwritten by the seeder. After rebuilding the demo server, update their Tags to `ns=2;s=Demo.Boolean`. Production configurations using their own NodeIds are unaffected. Public source snapshots start without private development history.
