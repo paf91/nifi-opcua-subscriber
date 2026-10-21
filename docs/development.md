@@ -28,7 +28,7 @@ Secure integration tests generate temporary keys/certificates and use ephemeral 
 
 ## CI
 
-GitHub Actions runs repository checks and both builds on pull requests and pushes. It uses read-only permissions, pinned official actions, Maven 3.9.11 Docker images and separate artifacts for each profile. Reports are uploaded even when a test fails; a downloadable artifact does not itself imply the job passed. CI does not publish a release or deploy a flow.
+GitHub Actions runs repository checks and both builds on pull requests and pushes. It uses read-only permissions, pinned official actions, Maven 3.9.11 Docker images and separate artifacts for each profile. Maven runs with full exception output, and its console logs are saved under `dist/ci-logs/` and uploaded even if dependency resolution fails before tests start. Test reports are also uploaded when available; a downloadable artifact does not itself imply the job passed. CI does not publish a release or deploy a flow.
 
 The legacy GitLab pipeline remains usable where a compatible runner is assigned. Local successful tests do not imply that a remote CI run has executed.
 

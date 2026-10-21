@@ -47,9 +47,12 @@ jobs:
           JAVA_TARGET: ${{ matrix.java }}
           PROFILE: ${{ matrix.profile }}
         run: |
+          set -o pipefail
+          mkdir -p dist/ci-logs
           docker run --rm --user "$(id -u):$(id -g)" -e MAVEN_CONFIG=/tmp/maven \
             -v "$PWD:/work" -w /work "maven:3.9.11-eclipse-temurin-$JAVA_TARGET" \
-            mvn -B -ntp -Dmaven.repo.local=/tmp/m2/repository "-P$PROFILE" clean verify
+            mvn -e -B -ntp -Dmaven.repo.local=/tmp/m2/repository "-P$PROFILE" clean verify \
+            2>&1 | tee "dist/ci-logs/$PROFILE-build.log"
       - name: Verify NAR and generate inventory
         env:
           NIFI_TARGET: ${{ matrix.nifi }}
@@ -65,9 +68,12 @@ jobs:
       - name: Build demo server
         if: matrix.java == '8'
         run: |
+          set -o pipefail
+          mkdir -p dist/ci-logs
           docker run --rm --user "$(id -u):$(id -g)" -e MAVEN_CONFIG=/tmp/maven \
             -v "$PWD:/work" -w /work maven:3.9.11-eclipse-temurin-8 \
-            mvn -B -ntp -Dmaven.repo.local=/tmp/m2/repository -f demo/pom.xml clean package
+            mvn -e -B -ntp -Dmaven.repo.local=/tmp/m2/repository -f demo/pom.xml clean package \
+            2>&1 | tee dist/ci-logs/demo-build.log
       - name: Upload NAR and test reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -76,6 +82,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
+            dist/ci-logs/
             nar/target/*.nar
             nar/target/dependency-inventory.json
             nar/target/SHA256SUMS
