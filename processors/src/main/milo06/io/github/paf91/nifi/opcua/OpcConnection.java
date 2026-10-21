@@ -15,8 +15,10 @@ import org.eclipse.milo.opcua.stack.client.UaStackClient;
 import org.eclipse.milo.opcua.stack.client.UaStackClientConfig;
 import org.eclipse.milo.opcua.stack.client.security.DefaultClientCertificateValidator;
 import org.eclipse.milo.opcua.stack.core.AttributeId;
+import org.eclipse.milo.opcua.stack.core.Identifiers;
 import org.eclipse.milo.opcua.stack.core.security.*;
 import org.eclipse.milo.opcua.stack.core.types.builtin.*;
+import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.*;
 import org.eclipse.milo.opcua.stack.core.types.structured.*;
 import org.eclipse.milo.opcua.stack.core.util.validation.ValidationCheck;
@@ -129,57 +131,92 @@ final class OpcConnection implements AutoCloseable {
                             client.getSubscriptionManager()
                                     .createSubscription(settings.publishingInterval()),
                             timeout);
-            List<TagDefinition> tags = settings.tags();
-            for (int offset = 0; offset < tags.size(); offset += 100) {
-                final List<TagDefinition> chunk =
-                        tags.subList(offset, Math.min(offset + 100, tags.size()));
-                List<MonitoredItemCreateRequest> requests = new ArrayList<>();
-                for (TagDefinition tag : chunk) {
-                    ReadValueId read =
-                            new ReadValueId(
-                                    tag.nodeId(),
-                                    AttributeId.Value.uid(),
-                                    null,
-                                    QualifiedName.NULL_VALUE);
-                    MonitoringParameters parameters =
-                            new MonitoringParameters(
-                                    subscription.nextClientHandle(),
-                                    tag.samplingIntervalMs(),
-                                    null,
-                                    uint(tag.queueSize()),
-                                    tag.discardOldest());
-                    requests.add(
-                            new MonitoredItemCreateRequest(
-                                    read, MonitoringMode.Reporting, parameters));
-                }
-                List<UaMonitoredItem> items =
-                        attempt.await(
-                                subscription.createMonitoredItems(
-                                        TimestampsToReturn.Both,
-                                        requests,
-                                        (item, index) ->
-                                                item.setValueConsumer(
-                                                        (i, value) -> {
-                                                            if (active)
-                                                                consumer.accept(
-                                                                        chunk.get(index), value);
-                                                        })),
-                                timeout);
-                if (items.size() != requests.size())
-                    throw new IllegalStateException(
-                            "Server returned an incomplete monitored-item response");
-                for (UaMonitoredItem item : items) {
-                    if (!item.getStatusCode().isGood())
-                        throw new IllegalStateException(
-                                "Server rejected monitored item "
-                                        + item.getReadValueId().getNodeId()
-                                        + " with "
-                                        + item.getStatusCode());
-                }
-            }
+            createMonitoredItems(
+                    client,
+                    subscription,
+                    settings.tags(),
+                    (tag, value) -> {
+                        if (active) consumer.accept(tag, value);
+                    },
+                    attempt,
+                    timeout);
         } catch (Exception e) {
             close();
             throw e;
+        }
+    }
+
+    static void createMonitoredItems(
+            OpcUaClient client,
+            UaSubscription subscription,
+            List<TagDefinition> tags,
+            BiConsumer<TagDefinition, DataValue> consumer,
+            ConnectionAttempt attempt,
+            long timeout)
+            throws Exception {
+        attempt.check();
+        DataValue limit =
+                attempt.await(
+                        client.readValue(
+                                0.0,
+                                TimestampsToReturn.Neither,
+                                Identifiers
+                                        .Server_ServerCapabilities_OperationLimits_MaxMonitoredItemsPerCall),
+                        timeout);
+        // This optional property can be absent or unreadable. Keep our cap in that case.
+        int batchSize = 100;
+        if (limit != null
+                && limit.getStatusCode() != null
+                && limit.getStatusCode().isGood()
+                && limit.getValue() != null
+                && limit.getValue().getValue() instanceof UInteger) {
+            long advertised = ((UInteger) limit.getValue().getValue()).longValue();
+            if (advertised > 0) batchSize = (int) Math.min(batchSize, advertised);
+        }
+        for (int offset = 0; offset < tags.size(); offset += batchSize) {
+            attempt.check();
+            final List<TagDefinition> chunk =
+                    tags.subList(offset, Math.min(offset + batchSize, tags.size()));
+            List<MonitoredItemCreateRequest> requests = new ArrayList<>();
+            for (TagDefinition tag : chunk) {
+                ReadValueId read =
+                        new ReadValueId(
+                                tag.nodeId(),
+                                AttributeId.Value.uid(),
+                                null,
+                                QualifiedName.NULL_VALUE);
+                MonitoringParameters parameters =
+                        new MonitoringParameters(
+                                subscription.nextClientHandle(),
+                                tag.samplingIntervalMs(),
+                                null,
+                                uint(tag.queueSize()),
+                                tag.discardOldest());
+                requests.add(
+                        new MonitoredItemCreateRequest(read, MonitoringMode.Reporting, parameters));
+            }
+            List<UaMonitoredItem> items =
+                    attempt.await(
+                            subscription.createMonitoredItems(
+                                    TimestampsToReturn.Both,
+                                    requests,
+                                    (item, index) ->
+                                            item.setValueConsumer(
+                                                    (i, value) ->
+                                                            consumer.accept(
+                                                                    chunk.get(index), value))),
+                            timeout);
+            if (items.size() != requests.size())
+                throw new IllegalStateException(
+                        "Server returned an incomplete monitored-item response");
+            for (UaMonitoredItem item : items) {
+                if (!item.getStatusCode().isGood())
+                    throw new IllegalStateException(
+                            "Server rejected monitored item "
+                                    + item.getReadValueId().getNodeId()
+                                    + " with "
+                                    + item.getStatusCode());
+            }
         }
     }
 

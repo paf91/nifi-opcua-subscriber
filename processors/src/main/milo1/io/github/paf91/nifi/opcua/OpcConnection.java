@@ -142,15 +142,7 @@ final class OpcConnection implements AutoCloseable {
                         });
                 subscription.addMonitoredItem(item);
             }
-            // Milo exposes this operation synchronously. Interrupt only this guarded call on Stop.
-            attempt.blocking(
-                    () -> {
-                        try {
-                            subscription.synchronizeMonitoredItems();
-                        } catch (Exception e) {
-                            throw new CompletionException(e);
-                        }
-                    });
+            synchronizeMonitoredItems(subscription, attempt);
             for (OpcUaMonitoredItem item : subscription.getMonitoredItems()) {
                 if (!item.getCreateResult().map(StatusCode::isGood).orElse(false))
                     throw new IllegalStateException(
@@ -163,6 +155,44 @@ final class OpcConnection implements AutoCloseable {
             close();
             throw e;
         }
+    }
+
+    static void synchronizeMonitoredItems(
+            OpcUaSubscription subscription, ConnectionAttempt attempt) {
+        // Milo exposes this operation synchronously. Interrupt only this guarded call on Stop.
+        attempt.blocking(
+                () -> {
+                    try {
+                        subscription.synchronizeMonitoredItems();
+                    } catch (MonitoredItemSynchronizationException e) {
+                        // Milo stores the useful status in result lists, not in the cause chain.
+                        for (var results :
+                                List.of(
+                                        e.getCreateResults(),
+                                        e.getModifyResults(),
+                                        e.getDeleteResults())) {
+                            for (var result : results) {
+                                if (!result.isGood()) {
+                                    StatusCode status =
+                                            result.serviceResult().isGood()
+                                                    ? result.operationResult().orElse(null)
+                                                    : result.serviceResult();
+                                    throw new IllegalStateException(
+                                            "Could not synchronize monitored item "
+                                                    + result.monitoredItem()
+                                                            .getReadValueId()
+                                                            .getNodeId()
+                                                    + " with "
+                                                    + status,
+                                            e);
+                                }
+                            }
+                        }
+                        throw new CompletionException(e);
+                    } catch (Exception e) {
+                        throw new CompletionException(e);
+                    }
+                });
     }
 
     static boolean secureEndpoint(EndpointDescription endpoint) {

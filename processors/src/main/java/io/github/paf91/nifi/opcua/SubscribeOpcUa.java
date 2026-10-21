@@ -191,8 +191,8 @@ public class SubscribeOpcUa extends AbstractProcessor {
                     "Request Timeout (ms)",
                     "Timeout per OPC operation, including discovery connect and GetEndpoints."
                         + " Startup has multiple operations; item creation is chunked in batches of"
-                        + " 100. Stop cancels startup. Cleanup waits at most 1 second per"
-                        + " disconnect.",
+                        + " up to 100, bounded by the server's advertised limit. Stop cancels"
+                        + " startup. Cleanup waits at most 1 second per disconnect.",
                     "10000",
                     300000);
     public static final PropertyDescriptor RETRY =
