@@ -15,6 +15,12 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 class LifecycleTest {
+    private static void setPrimary(TestRunner runner, boolean primary) {
+        // Set live state without TestRunner's synchronous notification; these tests
+        // explicitly control notification order, as NiFi delivers events asynchronously.
+        ((MockProcessContext) runner.getProcessContext()).setPrimaryNode(primary);
+    }
+
     static class Tracking extends SubscribeOpcUa {
         int opened, closed;
         ConnectionAttempt generation;
@@ -42,11 +48,11 @@ class LifecycleTest {
         a.setConnected(true);
         a.setClustered(true);
         a.setIsConfiguredForClustering(true);
-        a.setPrimaryNode(true);
+        setPrimary(a, true);
         b.setConnected(true);
         b.setClustered(true);
         b.setIsConfiguredForClustering(true);
-        b.setPrimaryNode(false);
+        setPrimary(b, false);
         first.start(a.getProcessContext());
         second.start(b.getProcessContext());
         assertEquals(0, first.opened);
@@ -56,25 +62,97 @@ class LifecycleTest {
         assertEquals(1, first.opened);
         assertEquals(0, second.opened);
         ConnectionAttempt old = first.generation;
-        a.setPrimaryNode(false);
+        setPrimary(a, false);
         first.primaryChanged(PrimaryNodeState.PRIMARY_NODE_REVOKED);
         assertEquals(1, first.closed);
         assertTrue(old.isCancelled());
         // Notifications from the old lease are fenced, including after a later re-election.
         first.value(old, 999);
-        b.setPrimaryNode(true);
+        setPrimary(b, true);
         second.primaryChanged(PrimaryNodeState.ELECTED_PRIMARY_NODE);
         second.onTrigger(b.getProcessContext(), b.getProcessSessionFactory().createSession());
         assertEquals(1, second.opened);
-        b.setPrimaryNode(false);
+        setPrimary(b, false);
         second.primaryChanged(PrimaryNodeState.PRIMARY_NODE_REVOKED);
-        a.setPrimaryNode(true);
+        setPrimary(a, true);
         first.primaryChanged(PrimaryNodeState.ELECTED_PRIMARY_NODE);
         first.onTrigger(a.getProcessContext(), a.getProcessSessionFactory().createSession());
         assertEquals(2, first.opened);
         a.assertTransferCount(SubscribeOpcUa.SUCCESS, 0);
         first.stop();
         second.stop();
+    }
+
+    @Test
+    void delayedRevocationCannotDisableReelectedPrimary() throws Exception {
+        Tracking p = new Tracking();
+        TestRunner r = ProcessorTest.configured(p);
+        r.setIsConfiguredForClustering(true);
+        r.setClustered(true);
+        r.setConnected(true);
+        setPrimary(r, true);
+        p.start(r.getProcessContext());
+        try {
+            p.onTrigger(r.getProcessContext(), r.getProcessSessionFactory().createSession());
+            ConnectionAttempt first = p.generation;
+            setPrimary(r, false);
+            p.primaryChanged(PrimaryNodeState.PRIMARY_NODE_REVOKED);
+            assertTrue(first.isCancelled());
+            assertEquals(1, p.closed);
+
+            setPrimary(r, true);
+            p.primaryChanged(PrimaryNodeState.ELECTED_PRIMARY_NODE);
+            p.onTrigger(r.getProcessContext(), r.getProcessSessionFactory().createSession());
+            ConnectionAttempt reelected = p.generation;
+            assertEquals(2, p.opened);
+
+            // An older revocation can arrive after the election and the new connection.
+            p.primaryChanged(PrimaryNodeState.PRIMARY_NODE_REVOKED);
+            assertFalse(reelected.isCancelled());
+            assertEquals(1, p.closed);
+            p.value(reelected, 42);
+            r.run(1, false, false);
+            r.assertTransferCount(SubscribeOpcUa.SUCCESS, 1);
+            assertEquals(2, p.opened, "A stale event must not force a new subscription");
+
+            p.stop();
+            p.start(r.getProcessContext());
+            p.onTrigger(r.getProcessContext(), r.getProcessSessionFactory().createSession());
+            assertEquals(
+                    3, p.opened, "Start must use current ownership without another election event");
+        } finally {
+            p.stop();
+        }
+    }
+
+    @Test
+    void delayedElectionCannotKeepAnUnownedConnection() throws Exception {
+        for (boolean disconnected : Arrays.asList(false, true)) {
+            Tracking p = new Tracking();
+            TestRunner r = ProcessorTest.configured(p);
+            r.setIsConfiguredForClustering(true);
+            r.setClustered(true);
+            r.setConnected(true);
+            setPrimary(r, true);
+            p.start(r.getProcessContext());
+            try {
+                p.onTrigger(r.getProcessContext(), r.getProcessSessionFactory().createSession());
+                ConnectionAttempt old = p.generation;
+                if (disconnected) r.setConnected(false);
+                else setPrimary(r, false);
+
+                // The delivered event describes an election that has already been superseded.
+                p.primaryChanged(PrimaryNodeState.ELECTED_PRIMARY_NODE);
+                assertTrue(old.isCancelled());
+                assertEquals(1, p.closed);
+                p.value(old, 999);
+                p.onTrigger(r.getProcessContext(), r.getProcessSessionFactory().createSession());
+                assertEquals(1, p.opened);
+                r.assertTransferCount(SubscribeOpcUa.SUCCESS, 0);
+            } finally {
+                p.stop();
+            }
+        }
     }
 
     @Test
@@ -161,8 +239,14 @@ class LifecycleTest {
                         }
                     };
             TestRunner r = ProcessorTest.configured(p);
+            if (revoke) {
+                r.setIsConfiguredForClustering(true);
+                r.setClustered(true);
+                r.setConnected(true);
+                setPrimary(r, true);
+            }
             p.start(r.getProcessContext());
-            ExecutorService worker = Executors.newSingleThreadExecutor();
+            ExecutorService worker = Executors.newFixedThreadPool(2);
             try {
                 Future<?> trigger =
                         worker.submit(
@@ -171,9 +255,16 @@ class LifecycleTest {
                                                 r.getProcessContext(),
                                                 r.getProcessSessionFactory().createSession()));
                 assertTrue(entered.await(2, TimeUnit.SECONDS));
+                if (revoke) setPrimary(r, false);
                 long start = System.nanoTime();
-                if (revoke) p.primaryChanged(PrimaryNodeState.PRIMARY_NODE_REVOKED);
-                else p.unscheduled();
+                Future<?> cancellation =
+                        worker.submit(
+                                () -> {
+                                    if (revoke)
+                                        p.primaryChanged(PrimaryNodeState.PRIMARY_NODE_REVOKED);
+                                    else p.unscheduled();
+                                });
+                cancellation.get(2, TimeUnit.SECONDS);
                 trigger.get(2, TimeUnit.SECONDS);
                 assertTrue(System.nanoTime() - start < TimeUnit.SECONDS.toNanos(2));
                 p.stop();

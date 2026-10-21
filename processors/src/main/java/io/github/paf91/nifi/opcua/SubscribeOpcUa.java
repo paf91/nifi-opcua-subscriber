@@ -230,7 +230,6 @@ public class SubscribeOpcUa extends AbstractProcessor {
     private final Object lifecycle = new Object();
     private volatile boolean running;
     private volatile ProcessContext scheduledContext;
-    private volatile boolean primaryRevoked;
     private volatile ConnectionAttempt attempt;
     private String bufferEndpoint;
     private boolean replaceBufferWhenDrained;
@@ -348,21 +347,21 @@ public class SubscribeOpcUa extends AbstractProcessor {
     }
 
     private boolean ownsSubscription() {
-        return !primaryRevoked
-                && (!getNodeTypeProvider().isConfiguredForClustering()
-                        || (scheduledContext != null
-                                && scheduledContext.isConnectedToCluster()
-                                && getNodeTypeProvider().isPrimary()));
+        ProcessContext context = scheduledContext;
+        return !getNodeTypeProvider().isConfiguredForClustering()
+                || (context != null
+                        && context.isConnectedToCluster()
+                        && getNodeTypeProvider().isPrimary());
     }
 
     @OnPrimaryNodeStateChange
-    public void primaryChanged(PrimaryNodeState state) {
-        if (state == PrimaryNodeState.PRIMARY_NODE_REVOKED) {
-            primaryRevoked = true;
+    public void primaryChanged(PrimaryNodeState ignored) {
+        // NiFi dispatches these notifications asynchronously. A delayed event must not
+        // override the current ownership state or disable a re-elected primary.
+        if (!ownsSubscription()) {
             cancelConnection();
         } else {
             synchronized (lifecycle) {
-                primaryRevoked = false;
                 nextRetry = 0;
             }
         }

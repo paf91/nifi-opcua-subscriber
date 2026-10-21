@@ -28,6 +28,7 @@
 - Subscription failure logs retain the rejected NodeId, OPC UA status and underlying cause, with configured passwords redacted.
 - NiFi 1 monitored-item requests respect the server's advertised operation limit below the local batch cap of 100.
 - NiFi 2 subscription failure logs unpack Milo's synchronization results to report the failed NodeId and actual service or item status.
+- Primary-role notifications use NiFi's current ownership state, so delayed revocation or election events cannot leave a re-elected primary disabled or keep an unowned connection open.
 
 ### Migration
 
