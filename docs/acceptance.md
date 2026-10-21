@@ -33,6 +33,8 @@ NiFi 1 runs two nodes with ZooKeeper; NiFi 2 runs one node. Both use secure OPC 
 
 The harness checks NAR discovery and validation, sampled JSON quality, active subscription and monitored-item counts, backpressure recovery, Stop/Start cleanup, server restart, a stalled server process, and delivery recovery. On the legacy cluster it stops the primary, checks election and delivery on the survivor, restarts the old primary, and checks single-subscription ownership after rejoin.
 
+For these once-per-second synthetic tags, every sampled record must have a source timestamp and receipt timestamp less than 30 seconds old, with no timestamp more than 5 seconds in the future. Recent receipt of an old source value is rejected. This freshness rule is specific to the synthetic acceptance server; production subscription values may legitimately remain unchanged for longer periods.
+
 The simulated network stall pauses the server container; it is not an asymmetric cluster network partition. Graceful primary shutdown is not a simultaneous coordinator/ZooKeeper failure. These scenarios require additional deployment testing.
 
 ## Evidence and cleanup

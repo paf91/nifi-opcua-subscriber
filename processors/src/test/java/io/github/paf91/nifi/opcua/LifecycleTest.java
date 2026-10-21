@@ -181,11 +181,19 @@ class LifecycleTest {
                 new DataValue(new Variant(1)));
         p.stop();
         r.setProperty(SubscribeOpcUa.ENDPOINT, "opc.tcp://different:4840");
+        r.setProperty(SubscribeOpcUa.SECURITY_POLICY, "None");
+        r.setProperty(SubscribeOpcUa.SECURITY_MODE, "None");
         p.start(r.getProcessContext());
         r.run(1, false, false);
         r.getFlowFilesForRelationship(SubscribeOpcUa.SUCCESS)
                 .get(0)
                 .assertAttributeEquals("opcua.endpoint", "opc.tcp://localhost:4840");
+        r.getFlowFilesForRelationship(SubscribeOpcUa.SUCCESS)
+                .get(0)
+                .assertAttributeEquals("opcua.security.policy", "Basic256Sha256");
+        r.getFlowFilesForRelationship(SubscribeOpcUa.SUCCESS)
+                .get(0)
+                .assertAttributeEquals("opcua.security.mode", "SignAndEncrypt");
         assertEquals(0, p.opened);
         r.run(1, false, false);
         p.value(p.generation, 2);
@@ -193,6 +201,12 @@ class LifecycleTest {
         r.getFlowFilesForRelationship(SubscribeOpcUa.SUCCESS)
                 .get(1)
                 .assertAttributeEquals("opcua.endpoint", "opc.tcp://different:4840");
+        r.getFlowFilesForRelationship(SubscribeOpcUa.SUCCESS)
+                .get(1)
+                .assertAttributeEquals("opcua.security.policy", "None");
+        r.getFlowFilesForRelationship(SubscribeOpcUa.SUCCESS)
+                .get(1)
+                .assertAttributeEquals("opcua.security.mode", "None");
     }
 
     @Test

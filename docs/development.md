@@ -24,7 +24,7 @@ python3 scripts/format-java.py --check
 
 To apply formatting, omit `--check`. The formatter downloads a pinned JAR from Maven Central and verifies its committed SHA-256 before execution; it is stored in ignored `.tools`. Formatting uses JDK 21 even when editing shared Java 8 sources.
 
-Secure integration tests generate temporary keys/certificates and use ephemeral loopback ports. They require neither production credentials nor the Docker demo. Python utility tests use only the standard library. Build the demo separately with JDK 8 using `mvn -f demo/pom.xml clean package`.
+Integration tests cover the 22 supported policy/mode/authentication combinations, plus encrypted username tokens over a None channel with trusted, missing and untrusted PKI. They generate temporary keys/certificates and use ephemeral loopback ports. They require neither production credentials nor the Docker demo. The optional `ExternalServerTest` is skipped unless `OPCUA_TEST_ENDPOINT` is set; see [server interoperability](interoperability.md). Python utility tests use only the standard library, including rejection of stale synthetic source timestamps after faults. Build the demo separately with JDK 8 using `mvn -f demo/pom.xml clean package`.
 
 ## CI
 

@@ -10,6 +10,9 @@
 
 ### Added
 
+- Configurable OPC TCP security policy/mode and anonymous or username/password authentication on both NiFi targets, including None/None without client certificate files. Existing secure defaults remain unchanged.
+- Policy/authentication matrix tests, real password-token encryption/validation tests, and opt-in subscription checks against independently configured OPC UA servers.
+
 - GitHub Actions builds for both NiFi/JDK targets, artifact checks and dependency inventories.
 - English installation, configuration, output, operations, troubleshooting, architecture and contributor guides.
 - Apache-2.0 project licensing and third-party notices.
@@ -23,6 +26,11 @@
 - Jackson is aligned to 2.18.12 and Netty to 4.1.139.Final using BOMs, with Bouncy Castle aligned to 1.86 following dependency-advisory review.
 
 ### Fixed
+
+- Buffered records preserve their original security policy/mode across stopped configuration changes.
+- OpenSSL-exported PEM private keys with leading Bag Attributes are recognized correctly.
+- Milo 1 multidimensional values serialize as nested JSON arrays instead of a display-text fallback.
+- Recovery acceptance requires fresh source timestamps as well as callback receipts for every sampled synthetic value.
 
 - CI retains Maven exception logs even when dependency resolution fails before test reports or NARs exist.
 - Subscription failure logs retain the rejected NodeId, OPC UA status and underlying cause, with configured passwords redacted.

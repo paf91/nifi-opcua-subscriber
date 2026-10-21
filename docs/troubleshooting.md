@@ -14,7 +14,9 @@ Start with `logs/nifi-app.log`, processor bulletins, validation errors and queue
 | Bad_CertificateUntrusted | Client trust on the OPC server and server/CA trust in NiFi's PKI directory |
 | Hostname, expiry or revocation failure | Advertised server hostname, clock, SAN, validity and required issuer certificates/CRLs |
 | Bad_UserAccessDenied / identity rejection | Username/password and access rights on the server; certificate trust alone is not user authorization |
-| No suitable endpoint | Server must offer Basic256Sha256, SignAndEncrypt and a username token policy |
+| No OPC TCP endpoint for configured settings | Match Security Policy, Security Mode and Authentication to a server endpoint; selection never downgrades automatically |
+| None/None login asks for PKI | The server encrypts username tokens separately from its channel; trust the server certificate in PKI Directory; no client certificate/key is required |
+| Anonymous configuration asks for client certificate | Sign and SignAndEncrypt still authenticate the client application; choose None/None only for an endpoint that offers it |
 | Connection to an unexpected hostname | OPC discovery may advertise another host; fix DNS/network/server configuration |
 | RUNNING but no data | Bulletins, endpoint reachability, primary role, outbound backpressure and node permissions |
 | Only initial values | Subscription emits changes, not periodic snapshots of unchanged values |

@@ -21,10 +21,11 @@ import java.util.concurrent.atomic.*;
 
 @Tags({"opcua", "opc", "subscription", "industrial", "iot"})
 @CapabilityDescription(
-        "Subscribes to OPC UA Value changes with Basic256Sha256 / SignAndEncrypt, a client"
-            + " certificate and username/password. Paste a list of NodeIds into Tags, or add"
-            + " individual tag properties. Outputs JSON arrays. Requires mutual certificate trust."
-            + " Buffers are in memory; overflow drops newest notifications and raises a bulletin.")
+        "Subscribes to OPC UA Value changes with configurable security and anonymous or"
+            + " username/password authentication. Defaults to Basic256Sha256 / SignAndEncrypt."
+            + " Paste a list of NodeIds into Tags, or add individual tag properties. Outputs JSON"
+            + " arrays. Secured connections require mutual certificate trust. Buffers are in"
+            + " memory; overflow drops newest notifications and raises a bulletin.")
 @DynamicProperty(
         name = "Tag alias",
         value = "NodeId or JSON with nodeId, samplingIntervalMs, queueSize, discardOldest",
@@ -85,33 +86,74 @@ public class SubscribeOpcUa extends AbstractProcessor {
     public static final PropertyDescriptor ENDPOINT =
             text(
                     "Endpoint URL",
-                    "OPC TCP discovery URL, e.g. opc.tcp://server:4840. Selected endpoint must"
-                            + " support Basic256Sha256, SignAndEncrypt and username identity.",
+                    "OPC TCP discovery URL, e.g. opc.tcp://server:4840. The server must offer"
+                            + " the configured security policy, message mode and authentication.",
                     false,
                     true);
+    public static final PropertyDescriptor SECURITY_POLICY =
+            new PropertyDescriptor.Builder()
+                    .name("Security Policy")
+                    .description(
+                            "OPC UA channel security policy. None disables channel protection;"
+                                + " Basic128Rsa15 and Basic256 are legacy compatibility options."
+                                + " Selection is exact; security is never automatically"
+                                + " downgraded.")
+                    .required(true)
+                    .allowableValues(
+                            "None",
+                            "Basic128Rsa15",
+                            "Basic256",
+                            "Basic256Sha256",
+                            "Aes128_Sha256_RsaOaep",
+                            "Aes256_Sha256_RsaPss")
+                    .defaultValue("Basic256Sha256")
+                    .build();
+    public static final PropertyDescriptor SECURITY_MODE =
+            new PropertyDescriptor.Builder()
+                    .name("Security Mode")
+                    .description(
+                            "None for Security Policy None; otherwise Sign or SignAndEncrypt. Sign"
+                                    + " authenticates messages without encrypting their contents.")
+                    .required(true)
+                    .allowableValues("None", "Sign", "SignAndEncrypt")
+                    .defaultValue("SignAndEncrypt")
+                    .build();
+    public static final PropertyDescriptor AUTHENTICATION =
+            new PropertyDescriptor.Builder()
+                    .name("Authentication")
+                    .description(
+                            "OPC UA session identity. Anonymous requires no username or password.")
+                    .required(true)
+                    .allowableValues(OpcSecurity.USERNAME, OpcSecurity.ANONYMOUS)
+                    .defaultValue(OpcSecurity.USERNAME)
+                    .build();
     public static final PropertyDescriptor APPLICATION_URI =
             text(
                     "Application URI",
                     "Optional advanced override. Leave unset to read the client application"
                         + " identity from the URI subject alternative name in your client"
-                        + " certificate. This is not the server URL. An override must exactly match"
-                        + " the certificate.",
+                        + " certificate for secured channels. Without channel security, defaults to"
+                        + " "
+                            + OpcSecurity.DEFAULT_APPLICATION_URI
+                            + ". This is not the server URL. For secured channels an override must"
+                            + " exactly match the certificate.",
                     false,
                     false);
     public static final PropertyDescriptor CERTIFICATE =
             text(
                     "Client Certificate File",
                     "Absolute path to X.509 PEM chain (leaf first), or DER leaf certificate, on the"
-                            + " NiFi host.",
+                            + " NiFi host. Required for Sign and SignAndEncrypt; unused with None.",
                     false,
-                    true);
+                    false);
     public static final PropertyDescriptor PRIVATE_KEY =
             text(
                     "Client Private Key File",
                     "Absolute path to RSA PEM private key (PKCS#1/PKCS#8, optional encryption) or"
-                            + " unencrypted PKCS#8 DER.",
+                        + " unencrypted PKCS#8 DER. Required for Sign and SignAndEncrypt; unused"
+                        + " with None.",
                     false,
-                    true);
+                    false);
     public static final PropertyDescriptor KEY_PASSWORD =
             text(
                     "Private Key Password",
@@ -126,9 +168,10 @@ public class SubscribeOpcUa extends AbstractProcessor {
                         + " for a CA chain also supply issuer certificates and CRLs. This lets NiFi"
                         + " verify the server, while your client certificate lets the server verify"
                         + " NiFi. All certificate checks remain enabled; certificates are never"
-                        + " automatically trusted.",
+                        + " automatically trusted. Required for secured channels, and when an"
+                        + " unencrypted endpoint encrypts username tokens with its certificate.",
                     false,
-                    true);
+                    false);
     public static final PropertyDescriptor TAG_LIST =
             new PropertyDescriptor.Builder()
                     .name("Tags")
@@ -150,9 +193,14 @@ public class SubscribeOpcUa extends AbstractProcessor {
                                             .build())
                     .build();
     public static final PropertyDescriptor USERNAME =
-            text("Username", "OPC UA username.", false, true);
+            text("Username", "Required for Username/Password authentication.", false, false);
     public static final PropertyDescriptor PASSWORD =
-            text("Password", "OPC UA password. Use a sensitive NiFi parameter.", true, true);
+            text(
+                    "Password",
+                    "Required for Username/Password authentication. Use a sensitive NiFi"
+                            + " parameter.",
+                    true,
+                    false);
     public static final PropertyDescriptor PUBLISHING =
             number(
                     "Publishing Interval (ms)",
@@ -210,6 +258,9 @@ public class SubscribeOpcUa extends AbstractProcessor {
     private static final List<PropertyDescriptor> PROPERTIES =
             Arrays.asList(
                     ENDPOINT,
+                    SECURITY_POLICY,
+                    SECURITY_MODE,
+                    AUTHENTICATION,
                     TAG_LIST,
                     CERTIFICATE,
                     PRIVATE_KEY,
@@ -232,6 +283,8 @@ public class SubscribeOpcUa extends AbstractProcessor {
     private volatile ProcessContext scheduledContext;
     private volatile ConnectionAttempt attempt;
     private String bufferEndpoint;
+    private String bufferSecurityPolicy;
+    private String bufferSecurityMode;
     private boolean replaceBufferWhenDrained;
     private final AtomicBoolean recovery = new AtomicBoolean();
     private final AtomicLong dropped = new AtomicLong();
@@ -311,9 +364,50 @@ public class SubscribeOpcUa extends AbstractProcessor {
                                             + " query or fragment")
                             .build());
         }
-        for (PropertyDescriptor path : Arrays.asList(CERTIFICATE, PRIVATE_KEY, PKI)) {
+        OpcSecurity security = null;
+        try {
+            security =
+                    new OpcSecurity(
+                            context.getProperty(SECURITY_POLICY).getValue(),
+                            context.getProperty(SECURITY_MODE).getValue(),
+                            context.getProperty(AUTHENTICATION).getValue());
+        } catch (RuntimeException e) {
+            errors.add(
+                    new ValidationResult.Builder()
+                            .subject("Security")
+                            .valid(false)
+                            .explanation(e.getMessage())
+                            .build());
+        }
+        if (security != null) {
+            if (security.requiresClientIdentity()) {
+                for (PropertyDescriptor required : Arrays.asList(CERTIFICATE, PRIVATE_KEY, PKI))
+                    requireProperty(context, required, errors);
+            }
+            if (security.usernameAuthentication()) {
+                requireProperty(context, USERNAME, errors);
+                requireProperty(context, PASSWORD, errors);
+            }
+        }
+        String applicationUri = context.getProperty(APPLICATION_URI).getValue();
+        if (applicationUri != null) {
             try {
-                if (!java.nio.file.Paths.get(context.getProperty(path).getValue()).isAbsolute())
+                if (!java.net.URI.create(applicationUri).isAbsolute())
+                    throw new IllegalArgumentException();
+            } catch (IllegalArgumentException e) {
+                errors.add(
+                        new ValidationResult.Builder()
+                                .subject(APPLICATION_URI.getName())
+                                .valid(false)
+                                .explanation("Use an absolute application URI")
+                                .build());
+            }
+        }
+        for (PropertyDescriptor path : Arrays.asList(CERTIFICATE, PRIVATE_KEY, PKI)) {
+            String value = context.getProperty(path).getValue();
+            if (value == null) continue;
+            try {
+                if (!java.nio.file.Paths.get(value).isAbsolute())
                     throw new IllegalArgumentException();
             } catch (Exception e) {
                 errors.add(
@@ -327,13 +421,32 @@ public class SubscribeOpcUa extends AbstractProcessor {
         return errors;
     }
 
+    private static void requireProperty(
+            ValidationContext context, PropertyDescriptor property, List<ValidationResult> errors) {
+        if (context.getProperty(property).getValue() == null)
+            errors.add(
+                    new ValidationResult.Builder()
+                            .subject(property.getName())
+                            .valid(false)
+                            .explanation(
+                                    "Required for the selected security and authentication"
+                                            + " settings")
+                            .build());
+    }
+
+    private void initializeBuffer(ProcessContext context) {
+        buffer = new NotificationBuffer(context.getProperty(BUFFER).asInteger());
+        bufferEndpoint = context.getProperty(ENDPOINT).getValue();
+        bufferSecurityPolicy = context.getProperty(SECURITY_POLICY).getValue();
+        bufferSecurityMode = context.getProperty(SECURITY_MODE).getValue();
+        replaceBufferWhenDrained = false;
+    }
+
     @OnScheduled
     public void start(ProcessContext context) throws Exception {
         synchronized (lifecycle) {
             if (buffer == null || buffer.size() == 0) {
-                buffer = new NotificationBuffer(context.getProperty(BUFFER).asInteger());
-                bufferEndpoint = context.getProperty(ENDPOINT).getValue();
-                replaceBufferWhenDrained = false;
+                initializeBuffer(context);
             } else {
                 // Preserve old data and its source identity, even if the next configuration
                 // differs.
@@ -379,16 +492,20 @@ public class SubscribeOpcUa extends AbstractProcessor {
                 new OpcSettings(
                         context.getProperty(ENDPOINT).getValue(),
                         context.getProperty(APPLICATION_URI).getValue(),
-                        java.nio.file.Paths.get(context.getProperty(CERTIFICATE).getValue()),
-                        java.nio.file.Paths.get(context.getProperty(PRIVATE_KEY).getValue()),
+                        path(context, CERTIFICATE),
+                        path(context, PRIVATE_KEY),
                         Optional.ofNullable(context.getProperty(KEY_PASSWORD).getValue())
                                 .orElse(""),
-                        java.nio.file.Paths.get(context.getProperty(PKI).getValue()),
+                        path(context, PKI),
                         context.getProperty(USERNAME).getValue(),
                         context.getProperty(PASSWORD).getValue(),
                         context.getProperty(PUBLISHING).asInteger(),
                         context.getProperty(TIMEOUT).asInteger(),
-                        tags);
+                        tags,
+                        new OpcSecurity(
+                                context.getProperty(SECURITY_POLICY).getValue(),
+                                context.getProperty(SECURITY_MODE).getValue(),
+                                context.getProperty(AUTHENTICATION).getValue()));
         NotificationBuffer destination = buffer;
         return new OpcConnection(
                 settings,
@@ -410,6 +527,11 @@ public class SubscribeOpcUa extends AbstractProcessor {
                     if (descriptor.isDynamic()) tags.put(descriptor.getName(), value);
                 });
         return tags;
+    }
+
+    private static java.nio.file.Path path(ProcessContext context, PropertyDescriptor property) {
+        String value = context.getProperty(property).getValue();
+        return value == null ? null : java.nio.file.Paths.get(value);
     }
 
     void accept(NotificationBuffer destination, TagDefinition tag, DataValue value) {
@@ -460,9 +582,7 @@ public class SubscribeOpcUa extends AbstractProcessor {
                 return;
             }
             if (replaceBufferWhenDrained && buffer.size() == 0) {
-                buffer = new NotificationBuffer(context.getProperty(BUFFER).asInteger());
-                bufferEndpoint = context.getProperty(ENDPOINT).getValue();
-                replaceBufferWhenDrained = false;
+                initializeBuffer(context);
             }
             // Stop the failed generation before draining, so it cannot keep filling the buffer.
             if (recovery.get() && connection != null) closeConnection();
@@ -536,8 +656,8 @@ public class SubscribeOpcUa extends AbstractProcessor {
                 attributes.put("mime.type", "application/json");
                 attributes.put("record.count", Integer.toString(records.size()));
                 attributes.put("opcua.endpoint", bufferEndpoint);
-                attributes.put("opcua.security.policy", "Basic256Sha256");
-                attributes.put("opcua.security.mode", "SignAndEncrypt");
+                attributes.put("opcua.security.policy", bufferSecurityPolicy);
+                attributes.put("opcua.security.mode", bufferSecurityMode);
                 flow = session.putAllAttributes(flow, attributes);
                 session.getProvenanceReporter().receive(flow, bufferEndpoint);
                 session.transfer(flow, SUCCESS);
@@ -597,6 +717,8 @@ public class SubscribeOpcUa extends AbstractProcessor {
         synchronized (lifecycle) {
             buffer = null;
             bufferEndpoint = null;
+            bufferSecurityPolicy = null;
+            bufferSecurityMode = null;
             scheduledContext = null;
         }
     }

@@ -25,7 +25,10 @@ PumpRunning | ns=2;s=Example.Pump.Running</pre>
 <h3>Individual properties</h3>
 <p>Alternatively, add a dynamic property named <strong>PumpRunning</strong> with value <code>ns=2;s=Example.Pump.Running</code>. Do not configure the same alias or NodeId twice across the bulk list and individual properties.</p>
 <h3>Types and connection settings</h3>
-<p>Data types are read from the server; do not append Float, Double or Boolean to the NodeId. Obtain the endpoint URL, username/password, client certificate and private key separately. The client and server must trust each other's certificates. Leave Application URI empty to derive it from the client certificate.</p>
+<p>Data types are read from the server; do not append Float, Double or Boolean to the NodeId. Obtain the endpoint URL and the server's security/authentication settings separately. Defaults remain Basic256Sha256, SignAndEncrypt and Username/Password. For secured channels, supply a client certificate/key and PKI Directory; client and server must trust each other. Leave Application URI empty to derive it from the client certificate.</p>
+<h3>Endpoints without channel security</h3>
+<p>For username/password without a client certificate, set <strong>Security Policy</strong> to <code>None</code>, <strong>Security Mode</strong> to <code>None</code>, and <strong>Authentication</strong> to <code>Username/Password</code>. Supply credentials and Tags; leave the client certificate and key unset. If the server separately encrypts username tokens, supply a PKI Directory containing its trusted certificate. Otherwise, PKI is not needed and credentials are sent without encryption.</p>
+<p>For anonymous access, select <code>Anonymous</code> and leave Username/Password unset. Anonymous on a secured channel still requires the client certificate/key and server trust. Without channel security, Application URI defaults to <code>urn:nifi:opcua:subscriber</code>. Endpoint selection never downgrades the requested settings.</p>
 <h3>Included demo</h3>
 <p>The local demo exposes <code>DemoSwitch | ns=2;s=Demo.Boolean</code>. Its addresses are separate from the fictional examples above.</p>
 <h3>Delivery limits</h3>

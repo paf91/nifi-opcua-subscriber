@@ -20,6 +20,8 @@ import org.eclipse.milo.opcua.stack.server.EndpointConfiguration;
 import org.eclipse.milo.opcua.stack.server.security.DefaultServerCertificateValidator;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.nio.file.*;
 import java.security.*;
@@ -38,6 +40,10 @@ class SecureSubscriptionTest {
 
     @BeforeEach
     void startServer() throws Exception {
+        startServer(null);
+    }
+
+    void startServer(String usernameTokenPolicy) throws Exception {
         Security.addProvider(new BouncyCastleProvider());
         KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
         g.initialize(2048);
@@ -66,19 +72,39 @@ class SecureSubscriptionTest {
                         .setBindPort(port)
                         .setPath("/test")
                         .setCertificate(serverCert)
-                        .addTokenPolicy(OpcUaServerConfig.USER_TOKEN_POLICY_USERNAME);
-        Set<EndpointConfiguration> endpoints = new HashSet<>();
-        endpoints.add(
-                builder.copy()
-                        .setSecurityPolicy(SecurityPolicy.Basic256Sha256)
-                        .setSecurityMode(MessageSecurityMode.SignAndEncrypt)
-                        .build());
-        endpoints.add(
-                builder.copy()
-                        .setPath("/test/discovery")
-                        .setSecurityPolicy(SecurityPolicy.None)
-                        .setSecurityMode(MessageSecurityMode.None)
-                        .build());
+                        .addTokenPolicy(OpcUaServerConfig.USER_TOKEN_POLICY_ANONYMOUS);
+        Set<EndpointConfiguration> endpoints = new LinkedHashSet<>();
+        for (String policy :
+                Arrays.asList(
+                        "None",
+                        "Basic128Rsa15",
+                        "Basic256",
+                        "Basic256Sha256",
+                        "Aes128_Sha256_RsaOaep",
+                        "Aes256_Sha256_RsaPss")) {
+            for (MessageSecurityMode mode :
+                    Arrays.asList(
+                            MessageSecurityMode.None,
+                            MessageSecurityMode.Sign,
+                            MessageSecurityMode.SignAndEncrypt)) {
+                if ("None".equals(policy) != (mode == MessageSecurityMode.None)) continue;
+                endpoints.add(
+                        builder.copy()
+                                .setSecurityPolicy(SecurityPolicy.valueOf(policy))
+                                .setSecurityMode(mode)
+                                // Milo 0.6's server validator needs an explicit token policy.
+                                .addTokenPolicy(
+                                        new UserTokenPolicy(
+                                                "username",
+                                                UserTokenType.UserName,
+                                                null,
+                                                null,
+                                                usernameTokenPolicy == null
+                                                        ? SecurityPolicy.valueOf(policy).getUri()
+                                                        : usernameTokenPolicy))
+                                .build());
+            }
+        }
         server =
                 new OpcUaServer(
                         OpcUaServerConfig.builder()
@@ -91,7 +117,7 @@ class SecureSubscriptionTest {
                                         new DefaultServerCertificateValidator(serverTrust))
                                 .setIdentityValidator(
                                         new UsernameIdentityValidator(
-                                                false,
+                                                true,
                                                 c ->
                                                         "user".equals(c.getUsername())
                                                                 && "test-password"
@@ -138,6 +164,106 @@ class SecureSubscriptionTest {
     void closeServer() throws Exception {
         if (server != null) server.shutdown().get(10, TimeUnit.SECONDS);
         if (serverTrust != null) serverTrust.close();
+    }
+
+    static java.util.stream.Stream<Object[]> configurations() {
+        return OpcSecurityTest.configurations()
+                .filter(c -> "None".equals(c[0]) == "None".equals(c[1]));
+    }
+
+    @ParameterizedTest(name = "live {0} / {1} / {2}")
+    @MethodSource("configurations")
+    void receivesDataUsingConfiguredSecurityAndAuthentication(
+            String policy, String mode, String authentication) throws Exception {
+        OpcSecurity security = new OpcSecurity(policy, mode, authentication);
+        OpcSettings settings =
+                new OpcSettings(
+                        endpoint,
+                        null,
+                        security.requiresClientIdentity() ? dir.resolve("client.der") : null,
+                        security.requiresClientIdentity() ? dir.resolve("client.pem") : null,
+                        "",
+                        security.requiresClientIdentity() ? dir.resolve("pki") : null,
+                        security.usernameAuthentication() ? "user" : null,
+                        security.usernameAuthentication() ? "test-password" : null,
+                        100,
+                        5000,
+                        Collections.singletonList(
+                                TagDefinition.parse("time", "ns=0;i=2258", 100, 10)),
+                        security);
+        BlockingQueue<DataValue> values = new LinkedBlockingQueue<>();
+        try (OpcConnection connection =
+                new OpcConnection(
+                        settings, (tag, value) -> values.offer(value), () -> {}, () -> {})) {
+            DataValue first = values.poll(10, TimeUnit.SECONDS);
+            assertNotNull(first);
+            assertTrue(first.getStatusCode().isGood());
+            assertNotNull(values.poll(10, TimeUnit.SECONDS));
+        }
+    }
+
+    @ParameterizedTest(name = "encrypted token on None channel: {0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"trusted", "untrusted", "missing"})
+    void encryptedUsernameOnUnsecuredChannelRequiresServerTrust(String trustState)
+            throws Exception {
+        closeServer();
+        startServer(SecurityPolicy.Basic256Sha256.getUri());
+        Path trust =
+                "missing".equals(trustState)
+                        ? null
+                        : dir.resolve("trusted".equals(trustState) ? "pki" : "empty-pki");
+        OpcSettings settings =
+                new OpcSettings(
+                        endpoint,
+                        null,
+                        null,
+                        null,
+                        "",
+                        trust,
+                        "user",
+                        "test-password",
+                        100,
+                        5000,
+                        Collections.singletonList(
+                                TagDefinition.parse("time", "ns=0;i=2258", 100, 10)),
+                        new OpcSecurity("None", "None", OpcSecurity.USERNAME));
+        if (!"trusted".equals(trustState)) {
+            assertThrows(
+                    Exception.class,
+                    () -> new OpcConnection(settings, (tag, value) -> {}, () -> {}, () -> {}));
+            return;
+        }
+        BlockingQueue<DataValue> values = new LinkedBlockingQueue<>();
+        try (OpcConnection connection =
+                new OpcConnection(
+                        settings, (tag, value) -> values.offer(value), () -> {}, () -> {})) {
+            DataValue first = values.poll(10, TimeUnit.SECONDS);
+            assertNotNull(first);
+            assertTrue(first.getStatusCode().isGood());
+            assertNotNull(values.poll(10, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void unsecuredChannelStillRejectsWrongPassword() {
+        OpcSettings settings =
+                new OpcSettings(
+                        endpoint,
+                        null,
+                        null,
+                        null,
+                        "",
+                        null,
+                        "user",
+                        "incorrect",
+                        100,
+                        5000,
+                        Collections.singletonList(
+                                TagDefinition.parse("time", "ns=0;i=2258", 100, 10)),
+                        new OpcSecurity("None", "None", OpcSecurity.USERNAME));
+        assertThrows(
+                Exception.class,
+                () -> new OpcConnection(settings, (tag, value) -> {}, () -> {}, () -> {}));
     }
 
     @Test
@@ -257,7 +383,7 @@ class SecureSubscriptionTest {
                             tokens,
                             "",
                             null);
-            assertFalse(OpcConnection.secureEndpoint(e));
+            assertFalse(OpcSecurity.DEFAULT.matches(e));
         }
     }
 

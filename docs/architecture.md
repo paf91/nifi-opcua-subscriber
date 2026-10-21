@@ -16,7 +16,7 @@
 
 ```mermaid
 flowchart LR
-    OPC[OPC UA server] -->|encrypted data changes| Callback[Connection callback]
+    OPC[OPC UA server] -->|configured OPC UA data changes| Callback[Connection callback]
     Callback -->|generation check| Buffer[Bounded memory queue]
     Buffer -->|reserve batch| Trigger[NiFi onTrigger]
     Trigger --> JSON[JSON FlowFile]
@@ -31,7 +31,7 @@ The source accepts no incoming connections and exposes only `success`. Bad-quali
 
 `@OnScheduled` prepares a buffer. `onTrigger` checks cluster ownership before connecting. Role notifications recheck NiFi's current connected/primary state instead of caching the event, so a delayed revocation cannot disable a re-elected primary. Loss of ownership closes the connection. A lifecycle lock serializes trigger and cleanup; cancellation is signaled before waiting on that lock, so a blocked connection attempt can exit. Each attempt fences callbacks so an old connection cannot write into a later generation.
 
-The notification queue is synchronized. It can hold one reserved batch at a time, and overflow never evicts that batch. Commit callbacks capture their original queue, so stop/start and later configuration changes do not acknowledge the wrong records. The old endpoint is held separately from newly configured properties until old data has drained.
+The notification queue is synchronized. It can hold one reserved batch at a time, and overflow never evicts that batch. Commit callbacks capture their original queue, so stop/start and later configuration changes do not acknowledge the wrong records. The old endpoint and channel security policy/mode are held separately from newly configured properties until old data has drained. `OpcSecurity` shares exact endpoint/token selection across the Milo adapters; client identity and trust-store creation depend on the selected channel and token protection. The version-specific `OpcValue` adapter converts Milo 1 matrices to nested arrays before shared JSON normalization.
 
 Each connection owns a one-thread Netty event loop. Shutdown requests an orderly disconnect, then closes the owned group, including unfinished handshakes. Shared Milo executors are not globally released by an individual processor. Trust-store watchers are closed with their connection. Synchronous modern monitored-item setup uses a guarded cancellation interrupt that is cleared before returning a reusable NiFi worker.
 

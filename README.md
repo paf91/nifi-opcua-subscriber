@@ -2,7 +2,7 @@
 
 An Apache NiFi processor that subscribes to OPC UA value changes and emits JSON arrays.
 
-- **Basic256Sha256 / SignAndEncrypt**, client certificate/private key, and username/password.
+- Configurable OPC TCP security: **None**, **Sign** or **SignAndEncrypt**, with anonymous or username/password login. Secure defaults remain Basic256Sha256 / SignAndEncrypt.
 - Bulk tag lists with optional aliases and per-tag sampling/queue settings.
 - Separate NARs for NiFi 1 / Java 8 and NiFi 2 / Java 21.
 - Primary-node ownership, cancellable connections, bounded buffering and restart tests.
@@ -20,6 +20,8 @@ This is an independent community project, not an Apache Software Foundation prod
 | Modern | 2.12.0 | 21 | 1.1.8 | `mvn -Pnifi2 clean verify` |
 
 **Pre-release software.** Both targets passed full-runtime acceptance with 1,000 synthetic tags and a 30-minute monotonic-timed load phase. The legacy target also passed a two-node primary shutdown, failover and rejoin test. See the [validation record](docs/validation.md) for artifact hashes, measurements and limits. NiFi 2 clustering, multi-day leak testing and production throughput validation remain outstanding. Java 8 tests used Temurin 8u472, not every Java 8 vendor or patch release.
+
+The new configurable security combinations have unit coverage and live tests in the Maven suite; the historical runtime acceptance results above cover only the secure default. Independent-server and full-runtime validation of the new combinations is still required.
 
 The versions above are build targets, not recommendations to deploy old NiFi/JDK releases. Do not install the Java 21 NAR into Java 8. Other NiFi versions are not implied to be supported.
 
@@ -45,7 +47,7 @@ Always clean when changing profiles. Copy the first artifact elsewhere before bu
 
 1. Choose the NAR matching your NiFi target and JVM.
 2. Install it using [autoload or a custom NAR directory](docs/installation.md).
-3. Add **SubscribeOpcUa**, connect **success**, and configure the endpoint, certificate, key, trusted-server directory, and username/password.
+3. Add **SubscribeOpcUa**, connect **success**, and configure the endpoint, security policy/mode and authentication. Supply certificate/key/trust files for secured channels; an unencrypted endpoint needs no client certificate.
 4. Paste complete NodeIds into **Tags**, then start the processor:
 
 ```text
@@ -53,7 +55,9 @@ DemoSwitch | ns=2;s=Demo.Boolean
 Server time | ns=0;i=2258
 ```
 
-These addresses are for the included demo. Use your server's actual addresses. Leave **Application URI** unset to read it from the client certificate.
+These addresses are for the included demo. Use your server's actual addresses. Leave **Application URI** unset to read it from the client certificate, or use the default application identity when no certificate is needed.
+
+For a username/password endpoint without channel security, select **Security Policy = None**, **Security Mode = None**, and **Authentication = Username/Password**. Set Username, Password and Tags; leave client certificate/key unset. PKI is needed only if that endpoint encrypts its username token with a server certificate. See the [configuration combinations](docs/configuration.md#security-and-authentication).
 
 Example output:
 
@@ -81,6 +85,7 @@ Notifications first enter a bounded memory buffer. Stop/Start in the same JVM re
 | [Troubleshooting](docs/troubleshooting.md) | Symptoms, likely causes, diagnostic steps |
 | [Local demo](docs/demo.md) | Build, launch, inspect, stop and clean up |
 | [Architecture](docs/architecture.md) | Lifecycle, concurrency and module layout |
+| [Server interoperability](docs/interoperability.md) | Opt-in tests against open62541 and your target server |
 | [Development and releases](docs/development.md) | Tests, CI, formatting, inventory and publication |
 | [Runtime acceptance](docs/acceptance.md) | Repeatable runtime, failover and synthetic-load checks |
 | [Validation record](docs/validation.md) | Local test evidence and remaining acceptance work |

@@ -2,7 +2,7 @@
 
 ## Scope
 
-The processor requires Basic256Sha256 / SignAndEncrypt, an RSA client certificate/key, username/password authentication and server-certificate validation. Discovery can use an unsecured discovery endpoint; the selected session must use the configured secure policy. There is no trust-all option.
+The defaults are Basic256Sha256 / SignAndEncrypt with an RSA client certificate/key, username/password authentication and server-certificate validation. Configurable policies also allow unencrypted or signed channels and anonymous login. Selection must exactly match the configured policy/mode/authentication; it never falls back to weaker security. Secured channels require mutual certificate trust. Unencrypted channels need no client identity, but encrypted username tokens still require validation of the server certificate. None with an unencrypted username token sends credentials without encryption. There is no trust-all option. See the [configuration reference](docs/configuration.md#security-and-authentication).
 
 Private keys and passwords are configuration secrets. Use NiFi sensitive parameters, restrictive filesystem permissions and trusted deployment administrators. The processor is a restricted component because it reads identity files and maintains a PKI store. Public demo credentials and generated demo identities are not production credentials.
 

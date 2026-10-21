@@ -16,6 +16,7 @@ final class OpcSettings {
     private final int publishingInterval;
     private final int requestTimeout;
     private final List<TagDefinition> tags;
+    private final OpcSecurity security;
 
     OpcSettings(
             String endpoint,
@@ -29,6 +30,34 @@ final class OpcSettings {
             int publishingInterval,
             int requestTimeout,
             List<TagDefinition> tags) {
+        this(
+                endpoint,
+                applicationUri,
+                certificate,
+                privateKey,
+                privateKeyPassword,
+                pki,
+                username,
+                password,
+                publishingInterval,
+                requestTimeout,
+                tags,
+                OpcSecurity.DEFAULT);
+    }
+
+    OpcSettings(
+            String endpoint,
+            String applicationUri,
+            Path certificate,
+            Path privateKey,
+            String privateKeyPassword,
+            Path pki,
+            String username,
+            String password,
+            int publishingInterval,
+            int requestTimeout,
+            List<TagDefinition> tags,
+            OpcSecurity security) {
         this.endpoint = endpoint;
         this.applicationUri = applicationUri;
         this.certificate = certificate;
@@ -40,6 +69,7 @@ final class OpcSettings {
         this.publishingInterval = publishingInterval;
         this.requestTimeout = requestTimeout;
         this.tags = tags;
+        this.security = security;
     }
 
     String endpoint() {
@@ -84,5 +114,9 @@ final class OpcSettings {
 
     List<TagDefinition> tags() {
         return tags;
+    }
+
+    OpcSecurity security() {
+        return security;
     }
 }

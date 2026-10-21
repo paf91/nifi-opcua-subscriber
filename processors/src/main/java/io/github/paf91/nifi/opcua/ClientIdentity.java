@@ -40,6 +40,22 @@ final class ClientIdentity {
         return applicationUri;
     }
 
+    static ClientIdentity load(OpcSettings settings) throws Exception {
+        if (!settings.security().requiresClientIdentity()) return null;
+        return load(
+                settings.certificate(),
+                settings.privateKey(),
+                settings.privateKeyPassword().toCharArray(),
+                settings.applicationUri());
+    }
+
+    static String applicationUri(OpcSettings settings, ClientIdentity identity) {
+        if (identity != null) return identity.applicationUri();
+        return settings.applicationUri() == null
+                ? OpcSecurity.DEFAULT_APPLICATION_URI
+                : settings.applicationUri();
+    }
+
     static String resolveApplicationUri(X509Certificate certificate, String override)
             throws CertificateParsingException {
         java.util.List<String> uris = new java.util.ArrayList<>();
@@ -82,13 +98,13 @@ final class ClientIdentity {
         if (!(leaf.getPublicKey() instanceof RSAPublicKey)
                 || ((RSAPublicKey) leaf.getPublicKey()).getModulus().bitLength() < 2048)
             throw new IllegalArgumentException(
-                    "Basic256Sha256 requires an RSA certificate with at least 2048 bits");
+                    "Secured connections require an RSA certificate with at least 2048 bits");
         String resolvedUri = resolveApplicationUri(leaf, applicationUri);
         byte[] bytes = Files.readAllBytes(keyFile);
         PrivateKey privateKey;
         try {
-            if (new String(bytes, 0, Math.min(bytes.length, 32), StandardCharsets.US_ASCII)
-                    .contains("-----BEGIN")) {
+            // OpenSSL PKCS#12 exports can put Bag Attributes before the PEM boundary.
+            if (new String(bytes, StandardCharsets.US_ASCII).contains("-----BEGIN ")) {
                 BouncyCastleProvider provider = new BouncyCastleProvider();
                 JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider(provider);
                 try (java.io.StringReader reader =

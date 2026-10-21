@@ -29,6 +29,22 @@ def timestamp(value):
     return datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
 
 
+def validate_fresh_records(records, now=None):
+    # Load.Tag values change once per second. A new callback containing an old
+    # source value does not demonstrate that this synthetic server recovered.
+    now = time.time() if now is None else now
+    assert records, 'No records to validate'
+    result = {}
+    for field in ('sourceTimestamp', 'receivedTimestamp'):
+        assert all(isinstance(r.get(field), str) and r[field] for r in records), f'Missing {field}'
+        times = [timestamp(r[field]) for r in records]
+        assert now - min(times) < 30, f'Stale {field} does not prove recovery'
+        assert max(times) <= now + 5, f'Future {field}; check test host clocks'
+        result['oldest' + field[0].upper() + field[1:]] = min(times)
+        result['newest' + field[0].upper() + field[1:]] = max(times)
+    return result
+
+
 def resource_snapshots(diagnostics, standalone_node):
     keys = ['usedHeap', 'usedHeapBytes', 'totalThreads', 'daemonThreads']
     if diagnostics.get('nodeSnapshots'):
@@ -193,9 +209,8 @@ class Harness:
             records = json.load(response)
         assert records and all(r['quality'] == 'Good' and r['nodeId'].startswith('ns=2;s=Load.Tag') for r in records)
         self.api(self.node, 'DELETE', base + '/listing-requests/' + lid)
-        newest = max(timestamp(r['receivedTimestamp']) for r in records)
-        assert time.time() - newest < 30, 'Stale queued data does not prove recovery'
-        self.check('json-content-validated', {'sampleRecords': len(records), 'fields': sorted(records[0]), 'newestReceivedTimestamp': newest})
+        freshness = validate_fresh_records(records)
+        self.check('json-content-validated', {'sampleRecords': len(records), 'fields': sorted(records[0]), **freshness})
 
     def _listing(self, base, lid):
         result = self.api(self.node, 'GET', base + '/listing-requests/' + lid)['listingRequest']

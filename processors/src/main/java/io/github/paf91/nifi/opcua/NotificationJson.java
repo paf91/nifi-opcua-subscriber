@@ -38,6 +38,7 @@ final class NotificationJson {
     }
 
     static Object normalize(Object value) {
+        value = OpcValue.nestedArray(value);
         if (value == null) return null;
         if (value instanceof ULong)
             return value.toString(); // exact beyond JSON/JavaScript integer precision

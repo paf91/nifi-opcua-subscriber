@@ -9,8 +9,11 @@ import io.netty.util.concurrent.DefaultThreadFactory;
 import org.eclipse.milo.opcua.sdk.client.DiscoveryClient;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClientConfig;
+import org.eclipse.milo.opcua.sdk.client.identity.AnonymousProvider;
 import org.eclipse.milo.opcua.sdk.client.identity.UsernameProvider;
 import org.eclipse.milo.opcua.sdk.client.subscriptions.*;
+import org.eclipse.milo.opcua.stack.core.StatusCodes;
+import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.security.*;
 import org.eclipse.milo.opcua.stack.core.types.builtin.*;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
@@ -55,51 +58,29 @@ final class OpcConnection implements AutoCloseable {
         timeout = settings.requestTimeout();
         try {
             attempt.check();
-            ClientIdentity identity =
-                    ClientIdentity.load(
-                            settings.certificate(),
-                            settings.privateKey(),
-                            settings.privateKeyPassword().toCharArray(),
-                            settings.applicationUri());
+            ClientIdentity identity = ClientIdentity.load(settings);
             eventLoop =
                     new NioEventLoopGroup(
                             1, new DefaultThreadFactory("nifi-opcua-subscriber-transport", true));
-            trust = FileBasedTrustListManager.createAndInitialize(settings.pki());
-            var validator =
-                    new DefaultClientCertificateValidator(
-                            trust,
-                            ValidationCheck.ALL_OPTIONAL_CHECKS,
-                            new MemoryCertificateQuarantine());
             List<EndpointDescription> endpoints = discover(settings.endpoint());
-            EndpointDescription endpoint =
-                    endpoints.stream()
-                            .filter(OpcConnection::secureEndpoint)
-                            .findFirst()
-                            .orElseThrow(
-                                    () ->
-                                            new IllegalArgumentException(
-                                                    "No Basic256Sha256 / SignAndEncrypt username"
-                                                            + " endpoint"));
+            EndpointDescription endpoint = settings.security().selectEndpoint(endpoints);
+            CertificateValidator validator = rejectUnconfiguredTrust();
+            if (settings.security().requiresServerTrust(endpoint)) {
+                if (settings.pki() == null)
+                    throw new IllegalArgumentException(
+                            "PKI Directory is required to validate this endpoint's server"
+                                    + " certificate, including encrypted username tokens");
+                trust = FileBasedTrustListManager.createAndInitialize(settings.pki());
+                validator =
+                        new DefaultClientCertificateValidator(
+                                trust,
+                                ValidationCheck.ALL_OPTIONAL_CHECKS,
+                                new MemoryCertificateQuarantine());
+            }
             attempt.check();
             client =
                     OpcUaClient.create(
-                            OpcUaClientConfig.builder()
-                                    .setEndpoint(endpoint)
-                                    .setApplicationName(
-                                            LocalizedText.english("NiFi OPC UA Subscriber"))
-                                    .setApplicationUri(identity.applicationUri())
-                                    .setKeyPair(identity.keyPair())
-                                    .setCertificate(identity.chain()[0])
-                                    .setCertificateChain(identity.chain())
-                                    .setCertificateValidator(validator)
-                                    .setIdentityProvider(
-                                            new UsernameProvider(
-                                                    settings.username(), settings.password()))
-                                    .setDiscoveryEndpoints(endpoints)
-                                    .setSessionEndpointValidationEnabled(true)
-                                    .setRequestTimeout(uint(timeout))
-                                    .setMaxResponseMessageSize(uint(16 * 1024 * 1024))
-                                    .build(),
+                            clientConfig(settings, endpoint, endpoints, identity, validator),
                             transport ->
                                     transport
                                             .setEventLoop(eventLoop)
@@ -195,12 +176,42 @@ final class OpcConnection implements AutoCloseable {
                 });
     }
 
-    static boolean secureEndpoint(EndpointDescription endpoint) {
-        return SecurityPolicy.Basic256Sha256.getUri().equals(endpoint.getSecurityPolicyUri())
-                && endpoint.getSecurityMode() == MessageSecurityMode.SignAndEncrypt
-                && endpoint.getUserIdentityTokens() != null
-                && Arrays.stream(endpoint.getUserIdentityTokens())
-                        .anyMatch(t -> t.getTokenType() == UserTokenType.UserName);
+    static OpcUaClientConfig clientConfig(
+            OpcSettings settings,
+            EndpointDescription endpoint,
+            List<EndpointDescription> endpoints,
+            ClientIdentity identity,
+            CertificateValidator validator) {
+        var builder =
+                OpcUaClientConfig.builder()
+                        .setEndpoint(endpoint)
+                        .setApplicationName(LocalizedText.english("NiFi OPC UA Subscriber"))
+                        .setApplicationUri(ClientIdentity.applicationUri(settings, identity))
+                        .setCertificateValidator(validator)
+                        .setIdentityProvider(
+                                settings.security().usernameAuthentication()
+                                        ? new UsernameProvider(
+                                                settings.username(),
+                                                settings.password(),
+                                                validator,
+                                                policies -> settings.security().userToken(endpoint))
+                                        : new AnonymousProvider())
+                        .setDiscoveryEndpoints(endpoints)
+                        .setSessionEndpointValidationEnabled(true)
+                        .setRequestTimeout(uint(settings.requestTimeout()))
+                        .setMaxResponseMessageSize(uint(16 * 1024 * 1024));
+        if (identity != null)
+            builder.setKeyPair(identity.keyPair())
+                    .setCertificate(identity.chain()[0])
+                    .setCertificateChain(identity.chain());
+        return builder.build();
+    }
+
+    static CertificateValidator rejectUnconfiguredTrust() {
+        return (chain, applicationUri, hosts) -> {
+            throw new UaException(
+                    StatusCodes.Bad_CertificateUntrusted, "PKI Directory is not configured");
+        };
     }
 
     @Override
