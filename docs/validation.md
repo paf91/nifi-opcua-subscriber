@@ -1,6 +1,6 @@
 # Validation record
 
-Publication preparation checked on 2026-10-19 (Europe/Amsterdam).
+Historical Preview 4 publication preparation checked on 2026-10-19 (Europe/Amsterdam).
 These are local results, not a GitHub Actions run or production certification.
 
 | Check | Result |
@@ -22,7 +22,7 @@ Bundled dependency patches include Jackson 2.18.12, Netty 4.1.139.Final and Boun
 
 The advisory result is a dated version lookup, not a reachability assessment or a guarantee of security. It excludes the NiFi runtime, JDK, containers and this project's SNAPSHOT code. Keep the generated dependency inventories and advisory report with release artifacts; repeat the lookup before a later release.
 
-## Full-runtime acceptance
+## Preview 4 full-runtime acceptance
 
 The renamed NARs passed the [disposable acceptance harness](acceptance.md) on 2026-10-19. The legacy run used a real two-node NiFi 1.23.2 cluster with ZooKeeper 3.9.4 and Temurin 8u472. The modern run used standalone NiFi 2.12.0 with the official image's OpenJDK 21.0.12.1 runtime. Maven builds used Temurin 8 and 21; build and runtime JDKs are recorded separately in the release evidence.
 
@@ -93,9 +93,23 @@ Disposable real NiFi runtimes loaded the corresponding NARs and checked default 
 
 Additional checks passed: 21 Python tests, Java formatting, repository checks, GitHub Actions workflow lint, and NAR dependency/bytecode verification (52 and 65). The revised GitHub workflow builds and enables the independent fixture; no remote GitHub run was initiated during this work.
 
-| Current artifact | SHA-256 |
+| Earlier five-feature artifact | SHA-256 |
 |---|---|
 | `nifi-opcua-subscriber-1.23.2-1.0.0-SNAPSHOT.nar` | `ed2a15c299aced67c14e28be76f4ad41635e40d2a728ef42739b4cb5e676fe94` |
 | `nifi-opcua-subscriber-2.12.0-1.0.0-SNAPSHOT.nar` | `ccd2b3639191c556a3f2e3b13ece815e8b6b2e0ccabe46a39cb9ef017546566f` |
 
-Local evidence and source-file hashes are stored in ignored `dist/features/qa-report.json` and `dist/features/source-sha256.json`, alongside build/runtime reports and the two NARs. These builds are uncommitted working-tree artifacts; no commit identity is claimed. Test keys are excluded. Delivery remains in-memory; durable recovery is reserved for a separate design.
+Local evidence and source-file hashes are stored in ignored `dist/features/qa-report.json` and `dist/features/source-sha256.json`, alongside build/runtime reports and the two NARs. These builds were captured before committing; their source-file manifest subsequently matched commit `d31815282e5009ea60e811884f390fdbd9d44617`. They are not the Preview 5 release binaries. Test keys are excluded. Delivery remains in-memory; durable recovery is reserved for a separate design.
+
+
+## Preview 5 release validation
+
+Preview 5 adds the NiFi 1 fallback for unadvertised or stale monitored-item limits. Regression tests cover accepted-chunk preservation, callback routing, cancellation, single-item rejection and failures that must not be retried. Both adapters additionally run independent-server tests for quiet keep-alives and recovery after an 18-second server pause with TCP left open, using numeric and URI-addressed tags.
+
+GitHub CI, GitLab CI and the local release builder now require the independent-server suites to execute without skips. A separate opt-in external endpoint test may still be skipped when no endpoint is configured. GitLab's configuration is linted locally against its API; no runner is currently assigned, so this is not a claim of remote CI execution.
+
+The Preview 5 release bundle records the exact committed source, NAR hashes, JDK/container identities, build and independent-server results, and separate runtime smoke-test evidence. Use that evidence for Preview 5. The older artifact hashes and Preview 4 cluster/load results above do not certify the newer binaries. Delivery remains a bounded in-memory queue; production-server, full-cluster and prolonged-load acceptance must be repeated for the new release where required.
+
+
+## Version 1.0.1
+
+Version 1.0.1 includes both verified fixes from Preview 5: adaptive NiFi 1 requests for missing/stale monitored-item limits, and required independent-server execution in both CI providers and release builds. It uses explicit `1.0.1` Maven/NAR coordinates. The matching release bundle records the exact source commit, rebuilt NAR hashes, build results and real NiFi smoke checks; historical results above retain their original versions and hashes.

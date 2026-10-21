@@ -6,8 +6,8 @@
 
 | Target | Artifact |
 |---|---|
-| NiFi 1.23.2 / Java 8 | `nifi-opcua-subscriber-1.23.2-1.0.0-SNAPSHOT.nar` |
-| NiFi 2.12.0 / Java 21 | `nifi-opcua-subscriber-2.12.0-1.0.0-SNAPSHOT.nar` |
+| NiFi 1.23.2 / Java 8 | `nifi-opcua-subscriber-1.23.2-1.0.1.nar` |
+| NiFi 2.12.0 / Java 21 | `nifi-opcua-subscriber-2.12.0-1.0.1.nar` |
 
 Build from source or obtain a tested CI/release artifact. Check the SHA-256 against the accompanying checksum manifest. A filename containing SNAPSHOT is not a unique release identity: keep the source commit and checksum with every deployment. Do not unpack the NAR or install individual dependency JARs.
 
@@ -49,16 +49,18 @@ These mechanisms are documented in the [NiFi 1.23.2 administration guide](https:
 ## Upgrade
 
 1. Record the installed NAR checksum, processor properties and flow configuration using your normal secure backup procedure.
-2. Stop the source. Pending memory data remains in the running JVM; restarting NiFi will lose it. Drain pending data beforehand if required by your ingestion policy.
-3. Stop NiFi; replace this bundle's NAR in its existing configured library location. Keep the previous file outside all scanned library directories.
-4. Start NiFi and verify extension loading, configuration validation and new data.
-5. Install the identical artifact on every cluster node before using the updated flow.
+2. Stop the source and drain pending data according to your ingestion policy. NiFi restart and processor version changes discard this processor's in-memory pending records.
+3. Install the new version alongside the previous version under their distinct filenames. Install the matching NiFi target on every cluster node. Restart NiFi when using a custom library directory; a new bundle version can also use autoload.
+4. On the stopped `SubscribeOpcUa` processor, use **Change version** and select **1.0.1**. Confirm that its bundle group is `io.github.paf91.nifi`, artifact is `nifi-opcua-subscriber-nar`, and version is `1.0.1`. NiFi stores this bundle version with the flow.
+5. Check properties, relationships and validation, run Verify, then start and confirm fresh data. Once no components reference the previous bundle, remove its NAR during a maintenance restart.
 
-Replacing a loaded SNAPSHOT NAR via autoload is not a reliable update strategy. Stop/restart for replacements. Do not delete repositories or NiFi's working directories as a routine upgrade step.
+See NiFi's [component version instructions](https://nifi.apache.org/nifi-docs/user-guide.html#changing-component-versions). This applies to the existing GitHub-aligned processor type; older private processor types need the [identity migration](namespace-migration.md).
+
+For a replacement with identical bundle coordinates, use a Stop/restart maintenance procedure. Keep only one copy of each identical bundle version across scanned directories. Do not delete repositories or NiFi's working directories as a routine upgrade step.
 
 ## Rollback
 
-Stop the source and NiFi, restore the previous NAR, and start NiFi. Restore compatible flow/properties from the secure backup if the processor contract changed. NiFi repositories and flow backups must remain consistent; do not roll them back independently without the installation's recovery procedure. A NAR rollback does not restore notifications lost from memory.
+Stop the source, make the previous NAR available, and use Change version to select its bundle version. Restore compatible flow/properties from the secure backup if the processor contract changed. Remove unused versions during a maintenance restart. NiFi repositories and flow backups must remain consistent; do not roll them back independently without the installation's recovery procedure. A NAR rollback does not restore notifications lost from memory.
 
 ## Cluster requirements
 

@@ -250,7 +250,7 @@ final class OpcConnection implements AutoCloseable {
             long advertised = ((UInteger) limit.getValue().getValue()).longValue();
             if (advertised > 0) batchSize = (int) Math.min(batchSize, advertised);
         }
-        for (int offset = 0; offset < tags.size(); offset += batchSize) {
+        for (int offset = 0; offset < tags.size(); ) {
             attempt.check();
             final List<TagDefinition> chunk =
                     tags.subList(offset, Math.min(offset + batchSize, tags.size()));
@@ -276,17 +276,35 @@ final class OpcConnection implements AutoCloseable {
                 requests.add(
                         new MonitoredItemCreateRequest(read, MonitoringMode.Reporting, parameters));
             }
-            List<UaMonitoredItem> items =
-                    attempt.await(
-                            subscription.createMonitoredItems(
-                                    TimestampsToReturn.Both,
-                                    requests,
-                                    (item, index) ->
-                                            item.setValueConsumer(
-                                                    (i, value) ->
-                                                            consumer.accept(
-                                                                    chunk.get(index), value))),
-                            timeout);
+            List<UaMonitoredItem> items;
+            try {
+                items =
+                        attempt.await(
+                                subscription.createMonitoredItems(
+                                        TimestampsToReturn.Both,
+                                        requests,
+                                        (item, index) ->
+                                                item.setValueConsumer(
+                                                        (i, value) ->
+                                                                consumer.accept(
+                                                                        chunk.get(index), value))),
+                                timeout);
+            } catch (Exception e) {
+                // The optional limit can be missing, stale or higher than the effective limit.
+                // A service-level rejection creates no items, so retry only this chunk.
+                attempt.check();
+                if (chunk.size() > 1
+                        && UaException.extractStatusCode(e)
+                                .map(
+                                        status ->
+                                                status.getValue()
+                                                        == StatusCodes.Bad_TooManyOperations)
+                                .orElse(false)) {
+                    batchSize = Math.max(1, chunk.size() / 2);
+                    continue;
+                }
+                throw e;
+            }
             if (items.size() != requests.size())
                 throw new IllegalStateException(
                         "Server returned an incomplete monitored-item response");
@@ -305,6 +323,7 @@ final class OpcConnection implements AutoCloseable {
                                 ? 0
                                 : item.getRevisedQueueSize().longValue());
             }
+            offset += chunk.size();
         }
     }
 

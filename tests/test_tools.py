@@ -158,6 +158,33 @@ class ReleaseTest(unittest.TestCase):
                              (root / "SHA256SUMS").read_text())
 
 
+class InteropCoverageTest(unittest.TestCase):
+    def reports(self, root, case):
+        for name in load('verify-interop-tests').SUITES:
+            (root / ('TEST-io.github.paf91.nifi.opcua.' + name + '.xml')).write_text(
+                '<testsuite>' + case + '</testsuite>')
+
+    def test_accepts_successful_independent_suites(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.reports(root, '<testcase name="live"/>')
+            self.assertEqual(2, load('verify-interop-tests').verify(root))
+
+    def test_rejects_missing_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, 'Missing'):
+                load('verify-interop-tests').verify(Path(directory))
+
+    def test_rejects_skips_failures_errors_and_empty_suites(self):
+        for case in ('', '<testcase><skipped/></testcase>',
+                     '<testcase><failure/></testcase>', '<testcase><error/></testcase>'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.reports(root, case)
+                with self.assertRaisesRegex(ValueError, 'without skips'):
+                    load('verify-interop-tests').verify(root)
+
+
 class AcceptanceTimestampTest(unittest.TestCase):
     def test_java_nanoseconds_and_milliseconds_are_accepted(self):
         parse = load("acceptance").timestamp

@@ -1,54 +1,48 @@
 # Changelog
 
-## Unreleased
+## 1.0.1 — Operation-limit fixes and release versioning (2026-10-21)
 
-- Rename the project and artifacts to `nifi-opcua-subscriber`; align Maven coordinates and Java packages with GitHub owner `paf91`: `io.github.paf91.nifi`. Existing preview flows require the documented processor-type migration.
-- Add disposable full-NiFi runtime, primary-failover and synthetic-load acceptance tooling with hash-linked evidence.
-- Add a clean-commit local release builder for both NAR targets, source, dependency reports and checksums.
-- Run dependency advisory checks in CI and on a weekly schedule.
-- Use generic installation paths throughout the public guide.
+- Include the NiFi 1 adaptive monitored-item batching fix and regression tests for missing/stale server limits, cancellation and callback routing.
+- Include mandatory independent open62541 integration and recovery tests in GitHub CI, GitLab CI and the release builder.
+- Version the reactor, demo and NiFi bundles as `1.0.1`; update CI, image builds and installation commands to the matching artifacts.
+- Carry forward Preview 5 connection diagnostics, namespace URI tags, deadbands, byte bounds and configurable security. Delivery remains in memory.
+- Existing flows using `1.0.0-SNAPSHOT` can migrate their processor bundle to `1.0.1`; see the installation guide before removing the old NAR.
+
+## Preview 5 — Connection diagnostics and interoperability (2026-10-21)
 
 ### Added
 
-- NiFi Verify connection diagnostics and an optional, default-disabled `diagnostics` relationship for bounded health reports.
+- NiFi Verify connection diagnostics and optional health FlowFiles on the `diagnostics` relationship, disabled by default.
 - Numeric `ns=` and namespace-URI `nsu=` tag addresses with session-specific resolution and duplicate detection.
 - Per-tag Absolute/Percent server deadbands that preserve quality changes and reject unsupported filters.
 - Serialized-byte limits for the memory buffer, individual records and success FlowFiles; retained buffers preserve their old limits across configuration changes.
-- Independent open62541 security, deadband, namespace-change and reconnect regression tests in both CI build profiles.
-
 - Configurable OPC TCP security policy/mode and anonymous or username/password authentication on both NiFi targets, including None/None without client certificate files. Existing secure defaults remain unchanged.
-- Policy/authentication matrix tests, real password-token encryption/validation tests, and opt-in subscription checks against independently configured OPC UA servers.
-
-- GitHub Actions builds for both NiFi/JDK targets, artifact checks and dependency inventories.
-- English installation, configuration, output, operations, troubleshooting, architecture and contributor guides.
-- Apache-2.0 project licensing and third-party notices.
-- Publication export/checks, pinned Java formatting and safe repeatable demo initialization.
-
-### Changed
-
-- Public examples use synthetic `DemoSwitch` / `ns=2;s=Demo.Boolean` identifiers.
-- Production tag inventories and source-document references are excluded from the public tree.
-- Java/XML formatting is normalized for review.
-- Jackson is aligned to 2.18.12 and Netty to 4.1.139.Final using BOMs, with Bouncy Castle aligned to 1.86 following dependency-advisory review.
+- Independent open62541 coverage for security, deadbands, namespace changes, keep-alives, silent-server recovery and unadvertised operation limits. GitHub CI, GitLab CI and the local release builder require these suites to pass without skips.
 
 ### Fixed
 
+- NiFi 1 reduces monitored-item request sizes after a service-level `Bad_TooManyOperations`, including absent or stale advertised limits. Accepted chunks are preserved; cancellation, other failures and single-item rejection terminate normally.
 - Buffered records preserve their original security policy/mode across stopped configuration changes.
 - OpenSSL-exported PEM private keys with leading Bag Attributes are recognized correctly.
 - Milo 1 multidimensional values serialize as nested JSON arrays instead of a display-text fallback.
-- Recovery acceptance requires fresh source timestamps as well as callback receipts for every sampled synthetic value.
-
-- CI retains Maven exception logs even when dependency resolution fails before test reports or NARs exist.
-- Subscription failure logs retain the rejected NodeId, OPC UA status and underlying cause, with configured passwords redacted.
-- NiFi 1 monitored-item requests respect the server's advertised operation limit below the local batch cap of 100.
-- NiFi 2 subscription failure logs unpack Milo's synchronization results to report the failed NodeId and actual service or item status.
+- Subscription failure logs retain the rejected NodeId, OPC UA status and underlying cause, with configured passwords redacted; Milo 1 synchronization failures include item/service details.
 - Primary-role notifications use NiFi's current ownership state, so delayed revocation or election events cannot leave a re-elected primary disabled or keep an unowned connection open.
+- GitHub CI retains Maven exception logs even when dependency resolution fails before test reports or NARs exist.
 
 ### Migration
 
-Existing flows receive the new defaults of 64 MiB buffered JSON, 1 MiB per record and 4 MiB per success FlowFile. Review these limits for large arrays or structures; oversized notifications now raise drop counters instead of consuming an unbounded serialization buffer. Diagnostics reports remain disabled by default.
+Existing flows receive the new defaults of 64 MiB buffered JSON, 1 MiB per record and 4 MiB per success FlowFile. Review these limits for large arrays or structures; oversized notifications raise drop counters. Diagnostics reports remain disabled by default. Delivery still uses a bounded in-memory queue; durable recovery across process restarts is deferred.
 
-Existing demo flows are not overwritten by the seeder. After rebuilding the demo server, update their Tags to `ns=2;s=Demo.Boolean`. Production configurations using their own NodeIds are unaffected. Public source snapshots start without private development history.
+## Preview 4 — GitHub identity and runtime acceptance (2026-10-19)
+
+- Rename the project and artifacts to `nifi-opcua-subscriber`; align Maven coordinates and Java packages with GitHub owner `paf91`: `io.github.paf91.nifi`. Earlier preview flows require the documented processor-type migration.
+- Add disposable full-NiFi runtime, primary-failover and synthetic-load acceptance tooling with hash-linked evidence. Recovery acceptance requires fresh source timestamps for every sampled synthetic value.
+- Add a clean-commit local release builder, GitHub Actions builds, NAR verification, dependency inventories and scheduled advisory checks.
+- Align Jackson to 2.18.12, Netty to 4.1.139.Final and Bouncy Castle to 1.86 following dependency-advisory review.
+- Add Apache-2.0 licensing, third-party notices, English guides, pinned formatting and publication export checks.
+- Public examples use synthetic `DemoSwitch` / `ns=2;s=Demo.Boolean` identifiers. Production tag inventories and private development history are excluded from public source snapshots.
+
+Existing demo flows are not overwritten by the seeder. After rebuilding the demo server, update their Tags to `ns=2;s=Demo.Boolean`. Production configurations using their own NodeIds are unaffected.
 
 ## Preview 3
 
@@ -67,4 +61,4 @@ Existing demo flows are not overwritten by the seeder. After rebuilding the demo
 
 - Separate legacy and modern NARs, secured subscriptions, JSON output and local NiFi demo.
 
-Preview entries describe development milestones, not a stable 1.0 release. The Maven version remains `1.0.0-SNAPSHOT`.
+Preview entries describe historical development milestones built as `1.0.0-SNAPSHOT`. The current Maven version is `1.0.1`; validation limits remain documented per release.

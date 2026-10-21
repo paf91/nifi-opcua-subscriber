@@ -32,6 +32,10 @@ class MonitoredItemCreationTest {
     private final List<CreateMonitoredItemsRequest> sent = new ArrayList<>();
     private int serverLimit = 100;
     private int nextItemId = 1;
+    private int lowerLimitAfterItems = Integer.MAX_VALUE;
+    private long rejectionStatus = StatusCodes.Bad_TooManyOperations;
+    private StatusCode itemStatus = StatusCode.GOOD;
+    private Runnable onRejection = () -> {};
 
     @BeforeEach
     void simulateServerResponses() {
@@ -45,18 +49,19 @@ class MonitoredItemCreationTest {
                             CreateMonitoredItemsRequest request = call.getArgument(0);
                             sent.add(request);
                             int size = request.getItemsToCreate().length;
+                            if (nextItemId > lowerLimitAfterItems) serverLimit = 2;
                             CompletableFuture<CreateMonitoredItemsResponse> response =
                                     new CompletableFuture<>();
                             if (size > serverLimit) {
-                                response.completeExceptionally(
-                                        new UaException(StatusCodes.Bad_TooManyOperations));
+                                onRejection.run();
+                                response.completeExceptionally(new UaException(rejectionStatus));
                             } else {
                                 MonitoredItemCreateResult[] results =
                                         new MonitoredItemCreateResult[size];
                                 for (int i = 0; i < size; i++) {
                                     results[i] =
                                             new MonitoredItemCreateResult(
-                                                    StatusCode.GOOD,
+                                                    itemStatus,
                                                     uint(nextItemId++),
                                                     1000.0,
                                                     uint(10),
@@ -159,5 +164,122 @@ class MonitoredItemCreationTest {
                                 25));
         assertTrue(pending.isCancelled());
         assertTrue(sent.isEmpty());
+    }
+
+    @Test
+    void recoversFromAnUnadvertisedServerItemLimit() throws Exception {
+        serverLimit = 50;
+        advertise(new DataValue(new StatusCode(StatusCodes.Bad_NodeIdUnknown)));
+        OpcConnection.createMonitoredItems(
+                client, subscription, tags(101), (tag, value) -> {}, new ConnectionAttempt(), 1000);
+        assertEquals(101, subscription.getMonitoredItems().size());
+        assertEquals(Arrays.asList(100, 50, 50, 1), batchSizes());
+    }
+
+    @Test
+    void shrinksStaleLimitWithoutRepeatingAcceptedChunksOrMisroutingValues() throws Exception {
+        serverLimit = 3;
+        lowerLimitAfterItems = 3;
+        advertise(new DataValue(new Variant(uint(3))));
+        List<TagDefinition> tags = tags(8);
+        Map<TagDefinition, DataValue> received = new LinkedHashMap<>();
+        OpcConnection.createMonitoredItems(
+                client, subscription, tags, received::put, new ConnectionAttempt(), 1000);
+        assertEquals(Arrays.asList(3, 3, 1, 1, 1, 1, 1), batchSizes());
+        assertEquals(8, subscription.getMonitoredItems().size());
+        Set<NodeId> nodes = new HashSet<>();
+        // Deliver through Milo's installed consumer, without a network or mock subscription.
+        java.lang.reflect.Method notify =
+                org.eclipse.milo.opcua.sdk.client.subscriptions.OpcUaMonitoredItem.class
+                        .getDeclaredMethod("onValueArrived", DataValue.class);
+        notify.setAccessible(true);
+        for (org.eclipse.milo.opcua.sdk.client.api.subscriptions.UaMonitoredItem item :
+                subscription.getMonitoredItems()) {
+            assertTrue(nodes.add(item.getReadValueId().getNodeId()));
+            notify.invoke(
+                    item,
+                    new DataValue(
+                            new Variant(item.getReadValueId().getNodeId().toParseableString())));
+        }
+        assertEquals(8, received.size());
+        for (TagDefinition tag : tags)
+            assertEquals(tag.nodeId().toParseableString(), received.get(tag).getValue().getValue());
+    }
+
+    @Test
+    void stopsWhenEvenOneItemExceedsTheLimit() {
+        serverLimit = 0;
+        advertise(new DataValue(new Variant(uint(100))));
+        Exception error =
+                assertThrows(
+                        Exception.class,
+                        () ->
+                                OpcConnection.createMonitoredItems(
+                                        client,
+                                        subscription,
+                                        tags(3),
+                                        (tag, value) -> {},
+                                        new ConnectionAttempt(),
+                                        1000));
+        assertEquals(
+                StatusCodes.Bad_TooManyOperations,
+                UaException.extractStatusCode(error).get().getValue());
+        assertEquals(Arrays.asList(3, 1), batchSizes());
+        assertTrue(subscription.getMonitoredItems().isEmpty());
+    }
+
+    @Test
+    void doesNotRetryOtherServiceFailures() {
+        serverLimit = 0;
+        rejectionStatus = StatusCodes.Bad_UserAccessDenied;
+        advertise(new DataValue(new Variant(uint(100))));
+        Exception error =
+                assertThrows(
+                        Exception.class,
+                        () ->
+                                OpcConnection.createMonitoredItems(
+                                        client,
+                                        subscription,
+                                        tags(3),
+                                        (tag, value) -> {},
+                                        new ConnectionAttempt(),
+                                        1000));
+        assertEquals(
+                StatusCodes.Bad_UserAccessDenied,
+                UaException.extractStatusCode(error).get().getValue());
+        assertEquals(Collections.singletonList(3), batchSizes());
+    }
+
+    @Test
+    void cancellationStopsAdaptiveRetries() {
+        serverLimit = 0;
+        ConnectionAttempt attempt = new ConnectionAttempt();
+        onRejection = attempt::cancel;
+        advertise(new DataValue(new Variant(uint(100))));
+        assertThrows(
+                CancellationException.class,
+                () ->
+                        OpcConnection.createMonitoredItems(
+                                client, subscription, tags(3), (tag, value) -> {}, attempt, 1000));
+        assertEquals(Collections.singletonList(3), batchSizes());
+    }
+
+    @Test
+    void doesNotRetryPerItemFailuresAsAServiceRejection() {
+        itemStatus = new StatusCode(StatusCodes.Bad_TooManyOperations);
+        advertise(new DataValue(new Variant(uint(100))));
+        IllegalStateException error =
+                assertThrows(
+                        IllegalStateException.class,
+                        () ->
+                                OpcConnection.createMonitoredItems(
+                                        client,
+                                        subscription,
+                                        tags(3),
+                                        (tag, value) -> {},
+                                        new ConnectionAttempt(),
+                                        1000));
+        assertTrue(error.getMessage().contains("Server rejected monitored item"));
+        assertEquals(Collections.singletonList(3), batchSizes());
     }
 }

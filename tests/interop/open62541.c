@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <unistd.h>
 
 static volatile sig_atomic_t running = 1;
 static UA_NodeId valueId;
@@ -90,6 +91,13 @@ int main(int argc, char **argv) {
     }
     UA_UInt16 ns = UA_Server_addNamespace(server, "urn:nifi:interop:tags");
     valueId = addVariable(server, ns, "Value", 0);
+    FILE *limitFlag = fopen("unadvertised-limit.flag", "r");
+    if(limitFlag) {
+        fclose(limitFlag);
+        config->maxMonitoredItemsPerCall = 2;
+        check(UA_Server_deleteNode(server, UA_NODEID_NUMERIC(0,
+            UA_NS0ID_SERVER_SERVERCAPABILITIES_OPERATIONLIMITS_MAXMONITOREDITEMSPERCALL), true));
+    }
     addVariable(server, ns, "NoRange", 0);
     UA_Range range = {0, 100};
     UA_VariableAttributes rangeAttr = UA_VariableAttributes_default;
@@ -103,7 +111,10 @@ int main(int argc, char **argv) {
     check(UA_Server_run_startup(server));
     FILE *ready = fopen("ready.txt", "w"); if(!ready) return 2;
     fprintf(ready, "%u", ns); fclose(ready);
-    while(running) UA_Server_run_iterate(server, true);
+    while(running) {
+        if(access("pause.flag", F_OK) == 0) usleep(10000);
+        else UA_Server_run_iterate(server, true);
+    }
     UA_Server_run_shutdown(server); UA_Server_delete(server);
     return 0;
 }

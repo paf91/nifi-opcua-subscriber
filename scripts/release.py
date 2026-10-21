@@ -69,8 +69,9 @@ def main():
     args.maven_cache.mkdir(parents=True, exist_ok=True)
     cache = args.maven_cache.resolve()
     run(['python3', ROOT / 'scripts/export-public.py', '--output', output / 'source.tar.gz'], ROOT)
-    metadata = {'sourceCommit': commit, 'buildTimestamp': datetime.now(timezone.utc).isoformat(),
-                'outputTimestamp': epoch, 'status': 'pre-release', 'targets': [],
+    version = ET.parse(ROOT / 'pom.xml').getroot().findtext('m:version', namespaces=NS)
+    metadata = {'version': version, 'sourceCommit': commit, 'buildTimestamp': datetime.now(timezone.utc).isoformat(),
+                'outputTimestamp': epoch, 'status': 'pre-release' if version.endswith('-SNAPSHOT') else 'release', 'targets': [],
                 'scope': 'Build, test and package checks. Runtime acceptance is recorded separately by NAR hash.'}
     with tempfile.TemporaryDirectory(prefix='opcua-release-') as directory:
         with tarfile.open(output / 'source.tar.gz') as archive:
@@ -79,10 +80,21 @@ def main():
         run(['python3', source / 'scripts/check-project.py', '--root', source], source)
         run(['python3', '-m', 'unittest', 'discover', '-s', 'tests', '-v'], source)
         targets = build_targets(source / 'pom.xml')
+        interop = Path(directory) / 'interop'
+        interop.mkdir()
+        interop_image = 'opcua-release-interop:' + commit[:12]
+        with (output / 'interop-build.log').open('w') as log:
+            run(['docker', 'build', '--tag', interop_image, '--file',
+                 'tests/interop/Dockerfile', 'tests/interop'], source, log)
+            run(['docker', 'run', '--rm', '--network', 'none', '--user', f'{os.getuid()}:{os.getgid()}',
+                 '-v', str(interop) + ':/output', interop_image], source, log)
+        metadata['independentServer'] = {'name': 'open62541', 'version': '1.5.9',
+                                         'binarySha256': checksum(interop / 'open62541')}
         def docker(java, arguments, log):
             image = 'maven:3.9.11-eclipse-temurin-' + java
             run(['docker', 'run', '--rm', '--user', f'{os.getuid()}:{os.getgid()}',
                  '-e', 'MAVEN_CONFIG=/tmp/maven', '-e', 'JAVA_TOOL_OPTIONS=-XX:ActiveProcessorCount=4',
+                 '-e', 'OPCUA_OPEN62541_BINARY=/interop/open62541', '-v', str(interop) + ':/interop:ro',
                  '-v', str(source) + ':/work', '-v', str(cache) + ':/tmp/m2', '-w', '/work', image,
                  *arguments], source, log)
             return json.loads(subprocess.check_output(['docker', 'image', 'inspect', image], text=True))[0]['Id']
@@ -94,9 +106,12 @@ def main():
                 image_id = docker(target['java'], ['mvn', '-B', '-ntp', '-Dmaven.repo.local=/tmp/m2/repository',
                     '-Dproject.build.outputTimestamp=' + epoch, '-P' + target['profile'], 'clean', 'verify'], log)
             nar = source / 'nar/target' / target['artifact']
+            run(['python3', source / 'scripts/verify-interop-tests.py',
+                 source / 'processors/target/surefire-reports'], source)
             run(['python3', source / 'scripts/verify-nar.py', nar, target['bytecode']], source)
             shutil.copy2(nar, dest / nar.name)
             shutil.copytree(source / 'processors/target/surefire-reports', dest / 'surefire-reports')
+            shutil.copytree(source / 'processors/target/interop-logs', dest / 'interop-logs')
             run(['python3', source / 'scripts/nar-inventory.py', dest / nar.name,
                  '--output', dest / 'dependency-inventory.json'], source)
             metadata['targets'].append(dict(target, sha256=checksum(dest / nar.name), buildImageId=image_id))

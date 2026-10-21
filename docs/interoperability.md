@@ -26,7 +26,7 @@ export OPCUA_OPEN62541_BINARY="$PWD/dist/open62541/open62541"
 mvn -Pnifi1 clean verify
 ```
 
-Use a Linux runtime compatible with the Ubuntu 22.04 test binary, or run Maven in the same Temurin Docker images as CI, mounting the repository at `/work` and setting `OPCUA_OPEN62541_BINARY=/work/dist/open62541/open62541`. Switch to Java 21 and `-Pnifi2` for the modern adapter. The suite is skipped when this variable is unset; do not count a skip as independent-server coverage. Server logs are retained under `processors/target/interop-logs/`. The tests use isolated local endpoints and never contact your configured production server.
+Use a Linux runtime compatible with the Ubuntu 22.04 test binary, or run Maven in the same Temurin Docker images as CI, mounting the repository at `/work` and setting `OPCUA_OPEN62541_BINARY=/work/dist/open62541/open62541`. Switch to Java 21 and `-Pnifi2` for the modern adapter. Both independent-server suites are skipped locally when this variable is unset; do not count a skip as independent-server coverage. Server logs are retained under `processors/target/interop-logs/`. GitHub CI, GitLab CI and `scripts/release.py` require both suites to execute without skips. The fixture also exercises a missing operation-limit property, quiet keep-alives and a server that temporarily stops responding while keeping TCP open. The tests use isolated local endpoints and never contact your configured production server.
 
 ## Test your target server
 

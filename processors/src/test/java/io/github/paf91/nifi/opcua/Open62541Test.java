@@ -390,4 +390,20 @@ class Open62541Test {
             worker.shutdownNow();
         }
     }
+
+    @Test
+    void connectsWithAnUnadvertisedTwoItemLimit() throws Exception {
+        Files.createFile(dir.resolve("unadvertised-limit.flag"));
+        start(false, "None");
+        SubscribeOpcUa processor = new SubscribeOpcUa();
+        TestRunner runner = processor(processor);
+        runner.setProperty("other", "nsu=" + NS + ";s=NoRange");
+        runner.setProperty("range", "nsu=" + NS + ";s=Value.EURange");
+        ConfigVerificationResult result =
+                processor.verify(runner.getProcessContext(), null, Collections.emptyMap()).get(0);
+        assertEquals(
+                ConfigVerificationResult.Outcome.SUCCESSFUL,
+                result.getOutcome(),
+                result.getExplanation());
+    }
 }

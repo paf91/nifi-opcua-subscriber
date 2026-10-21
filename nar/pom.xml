@@ -3,7 +3,7 @@
   <parent>
     <groupId>io.github.paf91.nifi</groupId>
     <artifactId>nifi-opcua-subscriber-bundle</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.0.1</version>
   </parent>
   <artifactId>nifi-opcua-subscriber-nar</artifactId>
   <packaging>nar</packaging>

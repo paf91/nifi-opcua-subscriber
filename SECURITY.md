@@ -14,7 +14,7 @@ Maintainers must enable private vulnerability reporting when publishing. No priv
 
 ## Supported scope
 
-This is a pre-release project; no long-term security support promise is made for any release. Exact build targets and validation limits are in the README. Supporting a legacy JVM target does not imply that its runtime, operating system or dependencies are up to date or secure.
+No long-term security support promise is made for any release. Exact build targets and validation limits are in the README. Supporting a legacy JVM target does not imply that its runtime, operating system or dependencies are up to date or secure.
 
 Dependency inventories identify what is bundled; they are not vulnerability scans. Before a release, review current advisories for the resolved versions and record the result. Updates that affect Milo/NiFi APIs must pass both build targets and lifecycle tests.
 

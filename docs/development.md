@@ -9,28 +9,28 @@ python3 scripts/check-project.py
 python3 -m unittest discover -s tests -v
 
 mvn -B -ntp clean verify
-python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.0-SNAPSHOT.nar 52
-python3 scripts/nar-inventory.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.0-SNAPSHOT.nar --output nar/target/dependency-inventory.json
+python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.1.nar 52
+python3 scripts/nar-inventory.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.1.nar --output nar/target/dependency-inventory.json
 ```
 
 Save the legacy NAR/reports outside target, switch to JDK 21, then:
 
 ```sh
 mvn -B -ntp -Pnifi2 clean verify
-python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.0-SNAPSHOT.nar 65
-python3 scripts/nar-inventory.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.0-SNAPSHOT.nar --output nar/target/dependency-inventory.json
+python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.1.nar 65
+python3 scripts/nar-inventory.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.1.nar --output nar/target/dependency-inventory.json
 python3 scripts/format-java.py --check
 ```
 
 To apply formatting, omit `--check`. The formatter downloads a pinned JAR from Maven Central and verifies its committed SHA-256 before execution; it is stored in ignored `.tools`. Formatting uses JDK 21 even when editing shared Java 8 sources.
 
-Integration tests cover the 22 supported policy/mode/authentication combinations, plus encrypted username tokens over a None channel with trusted, missing and untrusted PKI. They generate temporary keys/certificates and use ephemeral loopback ports. They require neither production credentials nor the Docker demo. CI additionally builds an independent open62541 fixture and sets `OPCUA_OPEN62541_BINARY` to enable its security, deadband, verification and namespace-restart suite. Local runs skip `Open62541Test` unless that variable points to the compiled fixture. The optional `ExternalServerTest` is skipped unless `OPCUA_TEST_ENDPOINT` is set; see [server interoperability](interoperability.md). Python utility tests use only the standard library, including rejection of stale synthetic source timestamps after faults. Build the demo separately with JDK 8 using `mvn -f demo/pom.xml clean package`.
+Integration tests cover the 22 supported policy/mode/authentication combinations, plus encrypted username tokens over a None channel with trusted, missing and untrusted PKI. They generate temporary keys/certificates and use ephemeral loopback ports. They require neither production credentials nor the Docker demo. CI additionally builds an independent open62541 fixture and sets `OPCUA_OPEN62541_BINARY` to enable its security, deadband, verification and namespace-restart suite. Local runs skip `Open62541Test` and `Open62541RecoveryTest` unless that variable points to the compiled fixture. The optional `ExternalServerTest` is skipped unless `OPCUA_TEST_ENDPOINT` is set; see [server interoperability](interoperability.md). Python utility tests use only the standard library, including rejection of stale synthetic source timestamps after faults. Build the demo separately with JDK 8 using `mvn -f demo/pom.xml clean package`.
 
 ## CI
 
 GitHub Actions runs repository checks and both builds on pull requests and pushes. It uses read-only permissions, pinned official actions, Maven 3.9.11 Docker images and separate artifacts for each profile. Maven runs with full exception output, and its console logs are saved under `dist/ci-logs/` and uploaded even if dependency resolution fails before tests start. Test reports are also uploaded when available; a downloadable artifact does not itself imply the job passed. CI does not publish a release or deploy a flow.
 
-The legacy GitLab pipeline remains usable where a compatible runner is assigned. Local successful tests do not imply that a remote CI run has executed.
+The GitLab pipeline builds the same checksum-pinned open62541 fixture in a separate Ubuntu job and supplies it to both Maven jobs. Both CI providers check the JUnit reports and fail if an independent-server suite is missing or skipped. GitLab requires a compatible runner to be assigned. Local successful tests do not imply that a remote CI run has executed.
 
 ## Artifact verification
 
@@ -81,7 +81,7 @@ After committing the intended source, run:
 python3 scripts/release.py --output dist/release --maven-cache ~/.m2
 ```
 
-The output directory must not exist. This builds from a clean Git archive in a temporary directory, not from existing Maven target directories. It tests both profiles, verifies NAR packaging and formatting, builds the demo, queries OSV, and creates a bundle containing source, binaries, test reports, dependency inventories, commit/image metadata and SHA-256 checksums. Both builds use the same commit-derived archive timestamp by default. For a reproducibility check, pass `--output-timestamp` with the previous bundle’s `outputTimestamp` and compare NAR hashes; source and tool changes can still change the result. This improves artifact traceability; bit-for-bit reproducibility across arbitrary toolchains is not claimed.
+The output directory must not exist. This builds from a clean Git archive in a temporary directory, not from existing Maven target directories. It builds the pinned open62541 fixture, requires its integration and recovery suites in both profiles, verifies NAR packaging and formatting, builds the demo, queries OSV, and creates a bundle containing source, binaries, test reports, independent-server logs, dependency inventories, commit/image metadata and SHA-256 checksums. Both builds use the same commit-derived archive timestamp by default. For a reproducibility check, pass `--output-timestamp` with the previous bundle’s `outputTimestamp` and compare NAR hashes; source and tool changes can still change the result. This improves artifact traceability; bit-for-bit reproducibility across arbitrary toolchains is not claimed.
 
 Failed output contains an `INCOMPLETE` marker and must not be distributed. The script never pushes, publishes or deploys. Runtime acceptance is separate: run [the acceptance harness](acceptance.md) against the resulting NARs and retain its hash-linked reports. Do not label a new binary runtime-tested merely because an earlier binary passed.
 
