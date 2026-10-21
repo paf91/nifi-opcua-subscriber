@@ -76,3 +76,26 @@ The local release bundle retains reviewed `runtime-acceptance/nifi1.json`, `nifi
 - Run GitHub Actions after importing the clean source snapshot and review its actual results. GitLab currently has no assigned runner; local results do not establish remote CI success.
 
 The existing interactive preview was not upgraded or started collecting data during these checks; its processor remained disabled with an empty queue. Acceptance used separate disposable containers and generated identities. Neither source nor binaries have been published to GitHub.
+
+
+## Five-feature validation — 21 October 2026
+
+These newer working-tree builds add Verify diagnostics, namespace URI tags, periodic health reports, byte limits and deadbands. Their focused results are separate from the historical load/cluster results above.
+
+| Target | Maven result | Live server cases included | Runtime smoke test |
+|---|---|---|---|
+| NiFi 1.23.2 / Temurin 8u472 | 236 passed, 1 optional external endpoint test skipped | 41 Milo + 29 open62541 | Passed on Java 8u472 |
+| NiFi 2.12.0 / Temurin 21.0.9 build | 231 passed, 1 optional external endpoint test skipped | 41 Milo + 29 open62541 | Passed on Java 21.0.12.1 |
+
+Both profiles ran Maven verification in isolated containers with open62541 1.5.9 built from its checksum-verified source. The independent suite exercises every supported policy/mode/login combination, encrypted username tokens on a None channel, Absolute/Percent deadbands and quality changes, rejected filters, URI movement after restart, and close/callback races. Shared regression tests include retained byte limits across Stop/Start, pending commit failures, missing/duplicate namespace resolution, bounded/redacted diagnostics, and delayed report commits across configuration changes. Modern diagnostics also have a regression test for reordered SDK monitored items.
+
+Disposable real NiFi runtimes loaded the corresponding NARs and checked default diagnostics auto-termination, successful and failed Verify requests through NiFi's REST API, URI-addressed Good measurements, and separate health FlowFiles. These smoke tests used a local open62541 None/None anonymous endpoint. They are not a full security matrix through the NiFi runtime, a cluster test or a prolonged-load run. The interactive preview was left unchanged.
+
+Additional checks passed: 21 Python tests, Java formatting, repository checks, GitHub Actions workflow lint, and NAR dependency/bytecode verification (52 and 65). The revised GitHub workflow builds and enables the independent fixture; no remote GitHub run was initiated during this work.
+
+| Current artifact | SHA-256 |
+|---|---|
+| `nifi-opcua-subscriber-1.23.2-1.0.0-SNAPSHOT.nar` | `ed2a15c299aced67c14e28be76f4ad41635e40d2a728ef42739b4cb5e676fe94` |
+| `nifi-opcua-subscriber-2.12.0-1.0.0-SNAPSHOT.nar` | `ccd2b3639191c556a3f2e3b13ece815e8b6b2e0ccabe46a39cb9ef017546566f` |
+
+Local evidence and source-file hashes are stored in ignored `dist/features/qa-report.json` and `dist/features/source-sha256.json`, alongside build/runtime reports and the two NARs. These builds are uncommitted working-tree artifacts; no commit identity is claimed. Test keys are excluded. Delivery remains in-memory; durable recovery is reserved for a separate design.

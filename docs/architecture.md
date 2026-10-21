@@ -25,7 +25,7 @@ flowchart LR
     Commit -->|failure: release reservation| Buffer
 ```
 
-The source accepts no incoming connections and exposes only `success`. Bad-quality data is still data; setup errors are reported through retry/bulletin behavior rather than an error FlowFile relationship.
+The source accepts no incoming connections and exposes `success` for data and an optional, default-disabled `diagnostics` relationship for health reports. Bad-quality data is still data; setup errors are reported through retry/bulletin behavior rather than an error FlowFile relationship.
 
 ## Ownership and concurrency
 
@@ -37,4 +37,12 @@ Each connection owns a one-thread Netty event loop. Shutdown requests an orderly
 
 ## Boundaries
 
-Local buffering is intentionally in-memory and bounded by record count. There is no replicated state, durable input journal or OPC history reader. A primary switch can overlap with a previously committed batch and a new subscription's initial values; downstream exactly-once behavior is outside this component's contract.
+Local buffering is intentionally in-memory and bounded by record count and serialized bytes. Batches reserve both records and their bytes until commit; their JSON array size also respects the original buffer configuration. There is no replicated state, durable input journal or OPC history reader. A primary switch can overlap with a previously committed batch and a new subscription's initial values; downstream exactly-once behavior is outside this component's contract.
+
+## Session-specific tags and monitoring
+
+`TagAddress` stores the configured numeric or URI address without a live namespace index. `TagResolver` reads the current NamespaceArray, resolves URI addresses, and rejects duplicate numeric targets before monitored-item creation. Each callback captures an immutable resolved tag. A different Milo session triggers a full connection rebuild for URI-configured subscriptions; old callbacks are fenced before new values are accepted. Numeric addresses remain explicit indexes. No address is inferred from a tag alias.
+
+Deadbands use the server's DataChangeFilter with StatusValue trigger. Rejected filters fail setup. The processor does not silently implement a second client-side filter or compensate with historical reads.
+
+`ConnectionDiagnostics` stores bounded metadata and local activity timestamps separately from measurements. Verification owns a temporary connection; normal triggers optionally serialize the current report into a separate FlowFile. Data and health reports produced by a trigger commit together. A pending report suppresses duplicate report scheduling; commit callbacks capture the original report schedule, so an old completion cannot delay reports after Stop/Start. Session callbacks and diagnostics use the same cancellation fence as data callbacks.

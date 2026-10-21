@@ -7,8 +7,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
-
 import java.util.*;
 
 /** Shared parser for configuration validation and subscription creation. */
@@ -22,7 +20,7 @@ final class TagList {
             String text, Map<String, String> individual, double sampling, int queue) {
         List<TagDefinition> tags = new ArrayList<>();
         Map<String, String> aliases = new HashMap<>();
-        Map<NodeId, String> nodes = new HashMap<>();
+        Map<TagAddress, String> nodes = new HashMap<>();
         String input = text == null ? "" : text.trim();
         if (input.startsWith("\uFEFF")) input = input.substring(1).trim();
         if (input.startsWith("[") || input.startsWith("{")) {
@@ -80,7 +78,7 @@ final class TagList {
                     String alias = line, value = line;
                     // A NodeId may itself contain pipes, commas, semicolons or equals signs.
                     // Recognize a complete NodeId prefix before considering the alias separator.
-                    if (!line.matches("^(?:ns=[0-9]+;)?[isgb]=.*")) {
+                    if (!line.startsWith("nsu=") && !line.matches("^(?:ns=[0-9]+;)?[isgb]=.*")) {
                         int separator = line.indexOf('|');
                         if (separator >= 0) {
                             alias = line.substring(0, separator).trim();
@@ -120,7 +118,7 @@ final class TagList {
     private static void add(
             List<TagDefinition> tags,
             Map<String, String> aliases,
-            Map<NodeId, String> nodes,
+            Map<TagAddress, String> nodes,
             TagDefinition tag,
             String source) {
         if (aliases.containsKey(tag.alias()))
@@ -129,11 +127,11 @@ final class TagList {
                             + tag.alias()
                             + "'; already defined at "
                             + aliases.get(tag.alias()));
-        if (nodes.containsKey(tag.nodeId()))
+        if (nodes.containsKey(tag.address()))
             throw new IllegalArgumentException(
-                    "Duplicate NodeId; already defined at " + nodes.get(tag.nodeId()));
+                    "Duplicate NodeId; already defined at " + nodes.get(tag.address()));
         aliases.put(tag.alias(), source);
-        nodes.put(tag.nodeId(), source);
+        nodes.put(tag.address(), source);
         tags.add(tag);
     }
 

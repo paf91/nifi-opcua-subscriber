@@ -127,4 +127,24 @@ class MonitoredItemSynchronizationTest {
                                 subscription, new ConnectionAttempt()));
         assertTrue(item.getCreateResult().orElseThrow().isGood());
     }
+
+    @Test
+    void negotiatedDiagnosticsMatchNodeIdsRegardlessOfSdkIterationOrder() throws Exception {
+        OpcUaMonitoredItem first = addItem("first");
+        OpcUaMonitoredItem second = addItem("second");
+        respondWith(StatusCode.GOOD, StatusCode.GOOD);
+        OpcConnection.synchronizeMonitoredItems(subscription, new ConnectionAttempt());
+        ConnectionDiagnostics report = new ConnectionDiagnostics();
+        List<TagDefinition> tags =
+                Arrays.asList(
+                        TagDefinition.parse("first alias", "ns=2;s=first", 100, 10),
+                        TagDefinition.parse("second alias", "ns=2;s=second", 250, 20));
+        OpcConnection.recordMonitoredItems(Arrays.asList(second, first), tags, report);
+        List<?> details = (List<?>) report.snapshot().get("monitoredItems");
+        Map<?, ?> secondDetail = (Map<?, ?>) details.get(0);
+        assertEquals("second alias", secondDetail.get("tag"));
+        assertEquals("ns=2;s=second", secondDetail.get("resolvedNodeId"));
+        assertEquals(250.0, secondDetail.get("requestedSamplingIntervalMs"));
+        assertEquals(20, secondDetail.get("requestedQueueSize"));
+    }
 }

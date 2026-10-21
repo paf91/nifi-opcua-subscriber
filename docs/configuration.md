@@ -96,10 +96,10 @@ With overrides:
 
 `samplingIntervalMs` is requested sampling on the server (0 requests its fastest supported rate). `queueSize` and `discardOldest` apply to that server-side monitored item's queue, not NiFi's local buffer. Unsupported options and malformed values fail configuration validation. The server may revise requested intervals/queue sizes. The connection attempt fails if any configured monitored item cannot be created. NiFi scheduling remains active and retries according to Reconnect Delay.
 
-Processor-wide defaults are publishing interval **1000 ms**, sampling **1000 ms**, monitored item queue **100**, local notification capacity **10000**, batch size **500**, request timeout **10000 ms**, and reconnect delay **5000 ms**. Resource consumption also depends on the size of individual values; the buffer capacity counts notifications, not bytes.
+Processor-wide defaults are publishing interval **1000 ms**, sampling **1000 ms**, monitored item queue **100**, local notification capacity **10000**, batch size **500**, request timeout **10000 ms**, and reconnect delay **5000 ms**. The count and byte limits both apply. The default buffer byte capacity is 64 MiB, maximum record size is 1 MiB, and maximum success FlowFile size is 4 MiB (including JSON punctuation). Diagnostics reports are disabled by default.
 
 
-NodeIds are case-sensitive. Whitespace around a list entry is trimmed; punctuation within the NodeId is preserved. Namespace indexes belong to the target server and can change after reconfiguration. Obtain the complete NodeId from that server's address-space browser. This processor does not browse nodes or resolve namespace URIs.
+NodeIds are case-sensitive. Whitespace around a list entry is trimmed; punctuation within the NodeId is preserved. Namespace indexes belong to the target server and can change after reconfiguration. Obtain the complete NodeId from that server's address-space browser. This processor resolves explicit namespace URIs; it does not browse for nodes.
 
 ## Required and optional properties
 
@@ -121,6 +121,10 @@ NodeIds are case-sensitive. Whitespace around a list entry is trimmed; punctuati
 | Default Sampling Interval (ms) | Yes | 1000; 1–86400000 |
 | Default Monitored Item Queue Size | Yes | 100; 1–1000000 |
 | Notification Buffer Capacity | Yes | 10000 records; 1–1000000 |
+| Notification Buffer Bytes | Yes | 67108864; 1–2147483647 serialized bytes, including pending commits |
+| Maximum Record Bytes | Yes | 1048576; 1–67108864 UTF-8 JSON bytes |
+| Maximum FlowFile Bytes | Yes | 4194304; 1–67108866 success JSON array bytes |
+| Diagnostics Interval (seconds) | Yes | 0 disables reports; 1–86400 enables them |
 | Max Records Per FlowFile | Yes | 500; 1–100000 |
 | Request Timeout (ms) | Yes | 10000; 1–300000 per operation |
 | Reconnect Delay (ms) | Yes | 5000; 1–300000 |
@@ -140,3 +144,32 @@ PumpRunning | ns=2;s=Example.Pump.Running
 ```
 
 Copy the full address, not only its display name. You do not configure `Float`, `Boolean`, or another value type: the processor uses the server's typed value. A table of NodeIds does not contain the endpoint URL, credentials or trust material; obtain those separately. The supplied demo exposes `Demo.Boolean`, not every illustrative node in this guide.
+
+## Namespace indexes and URIs
+
+Both formats work in bulk text, bulk JSON and individual properties. Choose the namespace that represents the intended data model; the processor does not infer a sampling rate from a namespace number. For example, a server could expose different real-time and per-minute values:
+
+```text
+Realtime | ns=2;s=Temperature
+Minute | nsu=urn:example:minute;s=Temperature
+```
+
+Use the exact URI from that server's NamespaceArray or address-space browser. `nsu=urn:example:minute;s=Temperature` follows that URI even if its numeric index changes from 3 to 4 in a later session. A numeric `ns=3;s=Temperature` always addresses index 3. Neither format converts a real-time value into a minute aggregate. Integer (`i=`), string (`s=`), GUID (`g=`) and opaque Base64 (`b=`) identifiers are supported.
+
+URIs and identifiers are case-sensitive. In the URI portion, encode a literal semicolon as `%3B` and a literal percent sign as `%25`; a plus sign remains a plus sign. Missing or ambiguous URIs fail the connection. Mixed numeric/URI entries that resolve to the same NodeId also fail. URI-configured subscriptions are recreated when Milo opens a different session, before accepting values under a potentially changed namespace table. Buffered records retain their original resolved numeric NodeIds.
+
+## Deadbands
+
+Configure a server-side filter per numeric tag using JSON:
+
+```json
+{"nodeId":"nsu=urn:example:minute;s=Temperature","deadbandType":"Absolute","deadbandValue":0.5}
+```
+
+`deadbandType` is `None` (default), `Absolute`, or `Percent`. Absolute values must be finite and nonnegative. Percent values must be between 0 and 100 and require a server-provided `EURange` property. Absolute/Percent require `deadbandValue`; None accepts only zero or an omitted value. A change must exceed the threshold relative to the last queued value. Quality changes still generate notifications. Deadbands operate on the server; they do not create periodic snapshots or guarantee a maximum notification rate. If the server rejects the filter, the entire subscription attempt fails with the item status; there is no silent fallback.
+
+## Byte limits and diagnostics
+
+`Maximum Record Bytes` must fit `Notification Buffer Bytes`, and must be at most `Maximum FlowFile Bytes` minus two array-bracket bytes. A batch also accounts for commas. Oversized values are rejected during JSON serialization and counted separately in diagnostics. Full count or byte capacity drops the newest notification. Stop/Start retains the old buffer's byte and record limits until it drains, so reducing limits cannot strand previously accepted records. These limits bound serialized records, not the full JVM, decoded Milo values, transport buffers or temporary encoding allocations.
+
+Use NiFi **Verify** to test discovery, trust/authentication, namespace resolution and creation of all configured monitored items. Verification briefly creates a real session and subscription, then closes them; it emits no measurement FlowFiles and does not drain or replace the running processor's buffer. It can consume an additional server session while the processor is running. See [diagnostics](diagnostics.md) for optional health reports and their interpretation.

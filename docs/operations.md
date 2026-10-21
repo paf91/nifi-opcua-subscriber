@@ -19,11 +19,13 @@ Counters and error messages are emitted when the processor is triggered; backpre
 
 Watch outbound queue size, source and receipt timestamps, process heap/native memory, certificate expiry and OPC server session limits. Source clocks and NiFi clocks must be synchronized before using timestamp differences as latency measurements.
 
+Use **Verify** for connection diagnostics and enable **Diagnostics Interval (seconds)** for periodic reports on the `diagnostics` relationship. Reports distinguish keep-alives from data changes and include buffer usage, drop counts, certificate expiry and negotiated settings. See [the report reference](diagnostics.md).
+
 ## Capacity planning
 
 Let R be the incoming notification rate, D the blocked duration and B the typical encoded record size. A rough buffer requirement is `R × D` records, consuming at least `R × D × B` bytes plus Java objects, queued batch references, Milo and transport overhead. This is a sizing estimate, not a throughput claim.
 
-The local capacity counts records, not bytes. Large arrays or structured values can exhaust heap even below the record limit. Server-side item queues and the local buffer solve different problems. Increasing either does not provide historical recovery or durable storage. Measure with representative values, tag counts, change rates and outages before choosing limits.
+Local capacity is bounded by both record count and serialized bytes, including pending commits. A separate record-size limit stops excessive JSON encoding, and the success FlowFile limit bounds each batch. These are not whole-process memory limits: large decoded server values, Milo buffers and temporary Java allocations still consume memory. Server-side item queues and the local buffer solve different problems. Increasing either does not provide historical recovery or durable storage. Measure with representative values, tag counts, change rates and outages before choosing limits.
 
 ## Cluster acceptance
 

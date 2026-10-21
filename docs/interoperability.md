@@ -10,7 +10,25 @@ Run `mvn -Pnifi1 clean verify` on JDK 8 and `mvn -Pnifi2 clean verify` on JDK 21
 
 Socket-free tests check all 36 combinations, reject incompatible policy/mode pairs, validate real username-token encryption and server trust, preserve buffered security attributes, load PEM/DER keys, and decode binary OPC UA matrices into JSON.
 
-## Test an independent server
+## Built-in open62541 fixture
+
+CI builds the pinned open62541 1.5.9 source with OpenSSL, verifies its source archive SHA-256, and enables `Open62541Test` on both Java targets. The fixture is only a test executable, never a bundled NAR dependency. It creates fresh certificates, trusts only the generated client, and binds inside the test environment. It explicitly enables legacy policies and plaintext username tokens to test the supported compatibility settings; it is not a production server configuration.
+
+The independent suite covers all 22 policy/mode/login combinations, separately encrypted username tokens on a None channel, Absolute/Percent deadbands including quality transitions, rejection of missing EURange, verification failures, callbacks after close, and a server restart that moves a URI to a new index while placing a different value at the old index.
+
+To reproduce locally with Docker:
+
+```sh
+docker build --tag opcua-interop --file tests/interop/Dockerfile tests/interop
+mkdir -p dist/open62541
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/dist/open62541:/output" opcua-interop
+export OPCUA_OPEN62541_BINARY="$PWD/dist/open62541/open62541"
+mvn -Pnifi1 clean verify
+```
+
+Use a Linux runtime compatible with the Ubuntu 22.04 test binary, or run Maven in the same Temurin Docker images as CI, mounting the repository at `/work` and setting `OPCUA_OPEN62541_BINARY=/work/dist/open62541/open62541`. Switch to Java 21 and `-Pnifi2` for the modern adapter. The suite is skipped when this variable is unset; do not count a skip as independent-server coverage. Server logs are retained under `processors/target/interop-logs/`. The tests use isolated local endpoints and never contact your configured production server.
+
+## Test your target server
 
 Start a test instance of open62541, or use a designated test endpoint on your target server. Obtain its exact endpoint URL, advertised policy/mode, identity token policy, and a readable NodeId. For a None/None anonymous endpoint:
 

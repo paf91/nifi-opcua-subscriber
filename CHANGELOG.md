@@ -10,6 +10,12 @@
 
 ### Added
 
+- NiFi Verify connection diagnostics and an optional, default-disabled `diagnostics` relationship for bounded health reports.
+- Numeric `ns=` and namespace-URI `nsu=` tag addresses with session-specific resolution and duplicate detection.
+- Per-tag Absolute/Percent server deadbands that preserve quality changes and reject unsupported filters.
+- Serialized-byte limits for the memory buffer, individual records and success FlowFiles; retained buffers preserve their old limits across configuration changes.
+- Independent open62541 security, deadband, namespace-change and reconnect regression tests in both CI build profiles.
+
 - Configurable OPC TCP security policy/mode and anonymous or username/password authentication on both NiFi targets, including None/None without client certificate files. Existing secure defaults remain unchanged.
 - Policy/authentication matrix tests, real password-token encryption/validation tests, and opt-in subscription checks against independently configured OPC UA servers.
 
@@ -39,6 +45,8 @@
 - Primary-role notifications use NiFi's current ownership state, so delayed revocation or election events cannot leave a re-elected primary disabled or keep an unowned connection open.
 
 ### Migration
+
+Existing flows receive the new defaults of 64 MiB buffered JSON, 1 MiB per record and 4 MiB per success FlowFile. Review these limits for large arrays or structures; oversized notifications now raise drop counters instead of consuming an unbounded serialization buffer. Diagnostics reports remain disabled by default.
 
 Existing demo flows are not overwritten by the seeder. After rebuilding the demo server, update their Tags to `ns=2;s=Demo.Boolean`. Production configurations using their own NodeIds are unaffected. Public source snapshots start without private development history.
 

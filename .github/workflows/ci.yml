@@ -42,6 +42,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Build independent OPC UA test server
+        run: |
+          docker build --tag opcua-interop --file tests/interop/Dockerfile tests/interop
+          mkdir -p dist/open62541
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/dist/open62541:/output" opcua-interop
       - name: Build and test
         env:
           JAVA_TARGET: ${{ matrix.java }}
@@ -50,6 +55,7 @@ jobs:
           set -o pipefail
           mkdir -p dist/ci-logs
           docker run --rm --user "$(id -u):$(id -g)" -e MAVEN_CONFIG=/tmp/maven \
+            -e OPCUA_OPEN62541_BINARY=/work/dist/open62541/open62541 \
             -v "$PWD:/work" -w /work "maven:3.9.11-eclipse-temurin-$JAVA_TARGET" \
             mvn -e -B -ntp -Dmaven.repo.local=/tmp/m2/repository "-P$PROFILE" clean verify \
             2>&1 | tee "dist/ci-logs/$PROFILE-build.log"
@@ -88,3 +94,4 @@ jobs:
             nar/target/SHA256SUMS
             nar/target/advisory-report.json
             processors/target/surefire-reports/
+            processors/target/interop-logs/

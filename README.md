@@ -3,9 +3,10 @@
 An Apache NiFi processor that subscribes to OPC UA value changes and emits JSON arrays.
 
 - Configurable OPC TCP security: **None**, **Sign** or **SignAndEncrypt**, with anonymous or username/password login. Secure defaults remain Basic256Sha256 / SignAndEncrypt.
-- Bulk tag lists with optional aliases and per-tag sampling/queue settings.
+- Bulk tag lists with aliases, numeric or namespace-URI addresses, and per-tag sampling, queue and deadband settings.
 - Separate NARs for NiFi 1 / Java 8 and NiFi 2 / Java 21.
 - Primary-node ownership, cancellable connections, bounded buffering and restart tests.
+- NiFi Verify connection checks, optional health reports, and record/buffer/FlowFile byte limits.
 - A local secured OPC UA server and NiFi UI for trying the processor.
 
 Maintained under the GitHub identity **paf91**. Maven group: `io.github.paf91.nifi`; processor type: `io.github.paf91.nifi.opcua.SubscribeOpcUa`.
@@ -21,7 +22,7 @@ This is an independent community project, not an Apache Software Foundation prod
 
 **Pre-release software.** Both targets passed full-runtime acceptance with 1,000 synthetic tags and a 30-minute monotonic-timed load phase. The legacy target also passed a two-node primary shutdown, failover and rejoin test. See the [validation record](docs/validation.md) for artifact hashes, measurements and limits. NiFi 2 clustering, multi-day leak testing and production throughput validation remain outstanding. Java 8 tests used Temurin 8u472, not every Java 8 vendor or patch release.
 
-The new configurable security combinations have unit coverage and live tests in the Maven suite; the historical runtime acceptance results above cover only the secure default. Independent-server and full-runtime validation of the new combinations is still required.
+The new configurable security combinations have unit coverage and live tests in the Maven suite; the historical runtime acceptance results above cover only the secure default. CI also tests an independent open62541 server. Full-runtime validation of all new combinations on your actual NiFi deployment and target server is still required.
 
 The versions above are build targets, not recommendations to deploy old NiFi/JDK releases. Do not install the Java 21 NAR into Java 8. Other NiFi versions are not implied to be supported.
 
@@ -81,6 +82,7 @@ Notifications first enter a bounded memory buffer. Stop/Start in the same JVM re
 | [Installation](docs/installation.md) | Autoload, custom libraries, upgrades, rollback, cluster deployment |
 | [Configuration](docs/configuration.md) | Every property, tag formats, certificate/key and trust setup |
 | [Output](docs/output.md) | JSON types, timestamps, buffering, backpressure, restart guarantees |
+| [Diagnostics](docs/diagnostics.md) | NiFi Verify, health reports, negotiated settings and freshness limits |
 | [Operations](docs/operations.md) | Startup, monitoring, sizing, failover acceptance checks |
 | [Troubleshooting](docs/troubleshooting.md) | Symptoms, likely causes, diagnostic steps |
 | [Local demo](docs/demo.md) | Build, launch, inspect, stop and clean up |

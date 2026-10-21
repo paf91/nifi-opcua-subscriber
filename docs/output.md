@@ -1,20 +1,22 @@
 # Output and delivery guarantees
 
-Each success FlowFile contains a JSON array. Each notification includes `tag`, `nodeId`, `value`, `valueType`, `statusCode` (hex), `quality`, `sourceTimestamp`, and `receivedTimestamp`. An unavailable source timestamp is null. Records omit endpoint, schema version, and server timestamp. FlowFile attributes include `mime.type=application/json`, `record.count`, endpoint and security settings. Provenance records the source endpoint.
+Each success FlowFile contains a JSON array. Each notification includes `tag`, `nodeId`, `value`, `valueType`, `statusCode` (hex), `quality`, `sourceTimestamp`, and `receivedTimestamp`. For URI-configured tags only, `configuredNodeId` and `namespaceUri` are also included; `nodeId` remains the numeric address used in that session. An unavailable source timestamp is null. Records omit endpoint, schema version, and server timestamp. FlowFile attributes include `mime.type=application/json`, `record.count`, endpoint and security settings. Provenance records the source endpoint.
 
 Booleans, ordinary numbers, strings and arrays retain their JSON types. Multidimensional arrays become nested JSON arrays on both Milo versions. Int64/UInt64 are strings to avoid precision loss; ByteStrings use Base64. Proprietary/unsupported structured values are explicitly marked `encoding: display` with their type and textual representation; they are not decoded into a lossless schema. Bad/Uncertain values are emitted with quality information so downstream flow logic can decide how to handle them. No coercion is applied based on the document's `STRING` column.
 
 This is **data-change subscription**, not a periodic full snapshot, event/alarm subscription, historical read, or write client. Normally the server sends initial values and later changes; an unchanged value need not produce repeated FlowFiles.
 
-Notifications wait in a bounded in-memory queue. A batch stays reserved until NiFi's asynchronous commit succeeds; a failed commit releases it for retry. A second trigger cannot claim the same in-flight batch. Full buffers drop **newest** notifications and report a bulletin/counter. Server notification-loss callbacks also produce a bulletin/counter. Callbacks never block waiting for NiFi storage.
+Notifications wait in a bounded in-memory queue. A batch stays reserved until NiFi's asynchronous commit succeeds; a failed commit releases it for retry. A second trigger cannot claim the same in-flight batch. Count or byte capacity exhaustion drops **newest** notifications and report a bulletin/counter. Server notification-loss callbacks also produce a bulletin/counter. Callbacks never block waiting for NiFi storage.
 
 Discovery uses explicit clients with bounded connect, handshake and GetEndpoints operations. Request Timeout applies per operation, not to the entire multi-step startup. Stop cancels the active attempt, including synchronous monitored-item creation. Each connection owns one transport event-loop thread; cleanup closes that group to abort incomplete handshakes. Orderly disconnect waits at most one second before transport shutdown.
 
 Milo handles transport reconnects. Failed transfers, bad subscription status and watchdog expiry request subscription recreation on a later NiFi trigger, with a retry delay. Recovery is consequently delayed while NiFi scheduling is paused/backpressured. The processor closes sessions and PKI watchers when stopped and does not shut down Milo resources shared by other processors.
 
-Stop retains already received, uncommitted notifications in memory. On Start they are drained before opening a new subscription, even if the server is unavailable or properties have changed. Retained records keep the old endpoint and security policy/mode in FlowFile attributes, and the old endpoint in provenance; new settings and buffer capacity apply after draining. Pending asynchronous commits retain their reservation across Stop/Start. The memory is released as batches commit or when the processor is removed. The buffer stays on its original node during primary failover and can be drained when that node becomes primary again; it is not replicated.
+Stop retains already received, uncommitted notifications in memory. On Start they are drained before opening a new subscription, even if the server is unavailable or properties have changed. Retained records keep the old endpoint and security policy/mode in FlowFile attributes, and the old endpoint in provenance; new settings and buffer capacity apply after draining. The buffer also retains its original maximum record and FlowFile byte limits until drained. Pending asynchronous commits retain their reservation across Stop/Start. The memory is released as batches commit or when the processor is removed. The buffer stays on its original node during primary failover and can be drained when that node becomes primary again; it is not replicated.
 
 There is **no exactly-once or outage-lossless guarantee**: server queue overflow, unrecoverable republish gaps, crashes, stop/start, and cluster failover can lose values or produce repeats. Buffered, uncommitted notifications survive processor Stop/Start in the same JVM, but are not durable across a NiFi/JVM restart or crash. FlowFiles already committed to NiFi use its normal repository persistence. Changes occurring while the subscription is stopped are not recovered from OPC history. Applications needing historical recovery must add server historization and a separate catch-up design.
+Periodic health reports use a separate `diagnostics` relationship and `opcua.type=diagnostics`, with one JSON object per FlowFile. They are disabled by default and automatically terminated unless routed. The success FlowFile byte limit applies to measurement arrays, not these bounded metadata reports. See [diagnostics](diagnostics.md).
+
 ## Example
 
 ```json
@@ -35,7 +37,8 @@ There is **no exactly-once or outage-lossless guarantee**: server queue overflow
 | Field | Meaning |
 |---|---|
 | tag | Configured alias, or the NodeId when no alias is supplied |
-| nodeId | Milo's parseable NodeId representation |
+| nodeId | Numeric namespace NodeId actually used in the originating session |
+| configuredNodeId / namespaceUri | Original URI address and resolved URI; present only for URI-configured tags |
 | value | Typed JSON value, null, or documented fallback |
 | valueType | Java/Milo value class simple name; null when no value is supplied |
 | statusCode | Eight-digit hexadecimal OPC UA status; null if unavailable |

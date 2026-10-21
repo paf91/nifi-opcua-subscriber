@@ -42,6 +42,7 @@ final class OpcConnection implements AutoCloseable {
     private final long timeout;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final ConnectionAttempt attempt;
+    private final ConnectionDiagnostics diagnostics;
 
     OpcConnection(
             OpcSettings settings,
@@ -59,16 +60,35 @@ final class OpcConnection implements AutoCloseable {
             Runnable dataLost,
             ConnectionAttempt attempt)
             throws Exception {
+        this(settings, consumer, recovery, dataLost, attempt, new ConnectionDiagnostics());
+    }
+
+    OpcConnection(
+            OpcSettings settings,
+            BiConsumer<TagDefinition, DataValue> consumer,
+            Runnable recovery,
+            Runnable dataLost,
+            ConnectionAttempt attempt,
+            ConnectionDiagnostics diagnostics)
+            throws Exception {
         this.attempt = attempt;
+        this.diagnostics = diagnostics;
         timeout = settings.requestTimeout();
         try {
             attempt.check();
+            diagnostics.stage("Loading client identity");
             ClientIdentity identity = ClientIdentity.load(settings);
+            if (identity != null) diagnostics.certificate("clientCertificate", identity.chain()[0]);
             eventLoop =
                     new NioEventLoopGroup(
                             1, new DefaultThreadFactory("nifi-opcua-subscriber-transport", true));
+            diagnostics.stage("Discovering endpoints");
             List<EndpointDescription> endpoints = discover(settings.endpoint());
+            diagnostics.endpoints(endpoints);
+            diagnostics.stage("Selecting security and authentication");
             EndpointDescription endpoint = settings.security().selectEndpoint(endpoints);
+            diagnostics.selected(endpoint);
+            diagnostics.stage("Configuring server trust");
             ClientCertificateValidator validator = rejectUnconfiguredTrust();
             if (settings.security().requiresServerTrust(endpoint)) {
                 if (settings.pki() == null)
@@ -84,29 +104,76 @@ final class OpcConnection implements AutoCloseable {
             client =
                     OpcUaClient.create(
                             clientConfig(settings, endpoint, identity, validator, eventLoop));
+            final boolean resolveUris = TagResolver.needsNamespaces(settings.tags());
+            client.addSessionActivityListener(
+                    new org.eclipse.milo.opcua.sdk.client.SessionActivityListener() {
+                        @Override
+                        public void onSessionActive(
+                                org.eclipse.milo.opcua.sdk.client.api.UaSession session) {
+                            ifActive(
+                                    () -> {
+                                        boolean changed =
+                                                diagnostics.sessionActive(session.getSessionId());
+                                        if (changed && resolveUris) {
+                                            // A transferred subscription contains old numeric
+                                            // NodeIds. Recreate
+                                            // it
+                                            // from the original URI configuration before accepting
+                                            // more values.
+                                            active = false;
+                                            recovery.run();
+                                            attempt.cancel();
+                                        }
+                                    });
+                        }
+
+                        @Override
+                        public void onSessionInactive(
+                                org.eclipse.milo.opcua.sdk.client.api.UaSession session) {
+                            ifActive(diagnostics::sessionInactive);
+                        }
+                    });
+            diagnostics.stage("Opening authenticated session");
             attempt.await(client.connect(), timeout);
+            diagnostics.stage("Reading namespace table");
+            String[] namespaces = null;
+            try {
+                namespaces = readNamespaces(client, attempt, timeout);
+                diagnostics.namespaces(namespaces);
+            } catch (Exception e) {
+                attempt.check();
+                if (resolveUris) throw e;
+                diagnostics.namespaceUnavailable();
+            }
+            List<TagDefinition> resolvedTags = TagResolver.resolve(settings.tags(), namespaces);
+            diagnostics.stage("Creating subscription and monitored items");
             client.getSubscriptionManager()
                     .addSubscriptionListener(
                             new UaSubscriptionManager.SubscriptionListener() {
                                 @Override
+                                public void onKeepAlive(UaSubscription s, DateTime time) {
+                                    ifActive(diagnostics::keepAlive);
+                                }
+
+                                @Override
                                 public void onSubscriptionTransferFailed(
                                         UaSubscription s, StatusCode status) {
-                                    if (active) recovery.run();
+                                    ifActive(recovery);
                                 }
 
                                 @Override
                                 public void onStatusChanged(UaSubscription s, StatusCode status) {
-                                    if (active && status.isBad()) recovery.run();
+                                    if (status.isBad()) ifActive(recovery);
                                 }
 
                                 @Override
                                 public void onSubscriptionWatchdogTimerElapsed(UaSubscription s) {
-                                    if (active) recovery.run();
+                                    ifActive(recovery);
                                 }
 
                                 @Override
                                 public void onNotificationDataLost(UaSubscription s) {
-                                    if (active) dataLost.run();
+                                    ifActive(dataLost);
                                 }
                             });
             subscription =
@@ -117,12 +184,20 @@ final class OpcConnection implements AutoCloseable {
             createMonitoredItems(
                     client,
                     subscription,
-                    settings.tags(),
+                    resolvedTags,
                     (tag, value) -> {
-                        if (active) consumer.accept(tag, value);
+                        ifActive(
+                                () -> {
+                                    diagnostics.notification(value);
+                                    consumer.accept(tag, value);
+                                });
                     },
                     attempt,
-                    timeout);
+                    timeout,
+                    diagnostics);
+            diagnostics.subscription(
+                    settings.publishingInterval(), subscription.getRevisedPublishingInterval());
+            diagnostics.stage("Subscribed");
         } catch (Exception e) {
             close();
             throw e;
@@ -136,6 +211,25 @@ final class OpcConnection implements AutoCloseable {
             BiConsumer<TagDefinition, DataValue> consumer,
             ConnectionAttempt attempt,
             long timeout)
+            throws Exception {
+        createMonitoredItems(
+                client,
+                subscription,
+                tags,
+                consumer,
+                attempt,
+                timeout,
+                new ConnectionDiagnostics());
+    }
+
+    static void createMonitoredItems(
+            OpcUaClient client,
+            UaSubscription subscription,
+            List<TagDefinition> tags,
+            BiConsumer<TagDefinition, DataValue> consumer,
+            ConnectionAttempt attempt,
+            long timeout,
+            ConnectionDiagnostics diagnostics)
             throws Exception {
         attempt.check();
         DataValue limit =
@@ -172,7 +266,11 @@ final class OpcConnection implements AutoCloseable {
                         new MonitoringParameters(
                                 subscription.nextClientHandle(),
                                 tag.samplingIntervalMs(),
-                                null,
+                                tag.filter() == null
+                                        ? null
+                                        : ExtensionObject.encode(
+                                                client.getStaticSerializationContext(),
+                                                tag.filter()),
                                 uint(tag.queueSize()),
                                 tag.discardOldest());
                 requests.add(
@@ -192,15 +290,42 @@ final class OpcConnection implements AutoCloseable {
             if (items.size() != requests.size())
                 throw new IllegalStateException(
                         "Server returned an incomplete monitored-item response");
-            for (UaMonitoredItem item : items) {
+            for (int itemIndex = 0; itemIndex < items.size(); itemIndex++) {
+                UaMonitoredItem item = items.get(itemIndex);
                 if (!item.getStatusCode().isGood())
                     throw new IllegalStateException(
                             "Server rejected monitored item "
                                     + item.getReadValueId().getNodeId()
                                     + " with "
                                     + item.getStatusCode());
+                diagnostics.item(
+                        chunk.get(itemIndex),
+                        item.getRevisedSamplingInterval(),
+                        item.getRevisedQueueSize() == null
+                                ? 0
+                                : item.getRevisedQueueSize().longValue());
             }
         }
+    }
+
+    private static String[] readNamespaces(
+            OpcUaClient client, ConnectionAttempt attempt, long timeout) throws Exception {
+        org.eclipse.milo.opcua.stack.core.types.structured.ReadResponse response =
+                attempt.await(
+                        client.read(
+                                0.0,
+                                TimestampsToReturn.Neither,
+                                Collections.singletonList(
+                                        new ReadValueId(
+                                                Identifiers.Server_NamespaceArray,
+                                                AttributeId.Value.uid(),
+                                                null,
+                                                QualifiedName.NULL_VALUE))),
+                        timeout);
+        if (response.getResults() == null || response.getResults().length != 1)
+            throw new IllegalArgumentException(
+                    "Server returned an incomplete NamespaceArray response");
+        return TagResolver.namespaceArray(response.getResults()[0]);
     }
 
     static OpcUaClientConfig clientConfig(
@@ -254,11 +379,19 @@ final class OpcConnection implements AutoCloseable {
         };
     }
 
+    private void ifActive(Runnable action) {
+        attempt.ifActive(
+                () -> {
+                    if (active) action.run();
+                });
+    }
+
     @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) return;
         active = false;
         attempt.cancel();
+        diagnostics.sessionInactive();
         CompletableFuture<?> disconnected = null;
         try {
             try {

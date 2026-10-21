@@ -28,7 +28,9 @@ import java.util.concurrent.atomic.*;
             + " memory; overflow drops newest notifications and raises a bulletin.")
 @DynamicProperty(
         name = "Tag alias",
-        value = "NodeId or JSON with nodeId, samplingIntervalMs, queueSize, discardOldest",
+        value =
+                "NodeId (ns= or nsu=) or JSON with nodeId, samplingIntervalMs, queueSize,"
+                        + " discardOldest, deadbandType, deadbandValue",
         description =
                 "Add one property per monitored tag using the + button. Fictional example:"
                         + " PumpRunning = ns=2;s=Example.Pump.Running. JSON options override the"
@@ -46,7 +48,10 @@ import java.util.concurrent.atomic.*;
                     requiredPermission = RequiredPermission.WRITE_FILESYSTEM,
                     explanation = "Initializes and maintains the OPC UA PKI trust directory.")
         })
-public class SubscribeOpcUa extends AbstractProcessor {
+public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProcessor {
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     private static PropertyDescriptor text(
             String name, String description, boolean sensitive, boolean required) {
         return new PropertyDescriptor.Builder()
@@ -60,6 +65,11 @@ public class SubscribeOpcUa extends AbstractProcessor {
 
     private static PropertyDescriptor number(
             String name, String description, String defaultValue, int max) {
+        return number(name, description, defaultValue, max, 1);
+    }
+
+    private static PropertyDescriptor number(
+            String name, String description, String defaultValue, int max, int minimum) {
         return new PropertyDescriptor.Builder()
                 .name(name)
                 .description(description)
@@ -70,14 +80,15 @@ public class SubscribeOpcUa extends AbstractProcessor {
                             boolean valid;
                             try {
                                 int n = Integer.parseInt(input);
-                                valid = n > 0 && n <= max;
+                                valid = n >= minimum && n <= max;
                             } catch (Exception e) {
                                 valid = false;
                             }
                             return new ValidationResult.Builder()
                                     .subject(subject)
                                     .valid(valid)
-                                    .explanation("Must be an integer between 1 and " + max)
+                                    .explanation(
+                                            "Must be an integer between " + minimum + " and " + max)
                                     .build();
                         })
                 .build();
@@ -180,10 +191,12 @@ public class SubscribeOpcUa extends AbstractProcessor {
                                 + " example: Temperature | ns=2;s=Example.Tank.Temperature. Blank"
                                 + " lines and lines starting with # are ignored. Alternatively"
                                 + " paste a JSON array of objects with nodeId, optional alias,"
-                                + " samplingIntervalMs, queueSize and discardOldest. Entries use"
-                                + " processor defaults unless overridden. Individual tag properties"
-                                + " are merged; duplicate aliases or NodeIds are rejected. Stop,"
-                                + " edit and restart to apply changes.")
+                                + " samplingIntervalMs, queueSize, discardOldest, deadbandType and"
+                                + " deadbandValue. NodeIds support numeric ns= indexes and nsu="
+                                + " namespace URIs. Entries use processor defaults unless"
+                                + " overridden. Individual tag properties are merged; duplicate"
+                                + " aliases or NodeIds are rejected. Stop, edit and restart to"
+                                + " apply changes.")
                     .required(false)
                     .addValidator(
                             (subject, input, context) ->
@@ -234,6 +247,40 @@ public class SubscribeOpcUa extends AbstractProcessor {
                     "Maximum notifications per JSON array.",
                     "500",
                     100000);
+    public static final PropertyDescriptor BUFFER_BYTES =
+            number(
+                    "Notification Buffer Bytes",
+                    "Maximum serialized notification bytes retained in memory, including pending"
+                            + " commits. Both count and byte limits apply; newest notifications are"
+                            + " dropped on overflow. Does not bound total JVM or Milo memory.",
+                    "67108864",
+                    Integer.MAX_VALUE);
+    public static final PropertyDescriptor RECORD_BYTES =
+            number(
+                    "Maximum Record Bytes",
+                    "Maximum UTF-8 JSON bytes per notification. Oversized notifications are"
+                            + " rejected during serialization and counted separately. Must fit the"
+                            + " buffer and the FlowFile byte limit.",
+                    "1048576",
+                    67108864);
+    public static final PropertyDescriptor BATCH_BYTES =
+            number(
+                    "Maximum FlowFile Bytes",
+                    "Maximum JSON array bytes including brackets and commas. Must be at least"
+                            + " Maximum Record Bytes plus two. Retained batches use their original"
+                            + " limits after Stop/Start.",
+                    "4194304",
+                    67108866);
+    public static final PropertyDescriptor DIAGNOSTICS_INTERVAL =
+            number(
+                    "Diagnostics Interval (seconds)",
+                    "Emit a bounded JSON health report to diagnostics at this interval; 0 disables"
+                            + " reports. Reports are generated on trigger, so NiFi backpressure can"
+                            + " delay them. Reports contain metadata, never sensor values or"
+                            + " passwords.",
+                    "0",
+                    86400,
+                    0);
     public static final PropertyDescriptor TIMEOUT =
             number(
                     "Request Timeout (ms)",
@@ -255,6 +302,14 @@ public class SubscribeOpcUa extends AbstractProcessor {
                     .name("success")
                     .description("JSON arrays of data changes, including Bad/Uncertain quality.")
                     .build();
+    public static final Relationship DIAGNOSTICS =
+            new Relationship.Builder()
+                    .name("diagnostics")
+                    .description(
+                            "Optional JSON connection, namespace, negotiated settings and buffer"
+                                    + " health reports. Automatically terminated by default.")
+                    .autoTerminateDefault(true)
+                    .build();
     private static final List<PropertyDescriptor> PROPERTIES =
             Arrays.asList(
                     ENDPOINT,
@@ -273,7 +328,11 @@ public class SubscribeOpcUa extends AbstractProcessor {
                     SAMPLING,
                     SERVER_QUEUE,
                     BUFFER,
+                    BUFFER_BYTES,
+                    RECORD_BYTES,
                     BATCH,
+                    BATCH_BYTES,
+                    DIAGNOSTICS_INTERVAL,
                     TIMEOUT,
                     RETRY);
     private volatile NotificationBuffer buffer;
@@ -285,10 +344,26 @@ public class SubscribeOpcUa extends AbstractProcessor {
     private String bufferEndpoint;
     private String bufferSecurityPolicy;
     private String bufferSecurityMode;
+    private long bufferBatchBytes;
     private boolean replaceBufferWhenDrained;
     private final AtomicBoolean recovery = new AtomicBoolean();
     private final AtomicLong dropped = new AtomicLong();
     private final AtomicLong dataLost = new AtomicLong();
+    private final AtomicLong oversized = new AtomicLong();
+    private final AtomicLong encodingErrors = new AtomicLong();
+    private final AtomicLong totalDropped = new AtomicLong();
+    private final AtomicLong totalDataLost = new AtomicLong();
+    private final AtomicLong connectionAttempts = new AtomicLong();
+    private final AtomicLong successfulConnections = new AtomicLong();
+    private volatile ConnectionDiagnostics diagnostics = new ConnectionDiagnostics();
+    private String lastFailure;
+    private final AtomicBoolean diagnosticsPending = new AtomicBoolean();
+
+    private static final class DiagnosticSchedule {
+        volatile long next;
+    }
+
+    private volatile DiagnosticSchedule diagnosticSchedule = new DiagnosticSchedule();
     private long nextRetry;
 
     @Override
@@ -298,7 +373,7 @@ public class SubscribeOpcUa extends AbstractProcessor {
 
     @Override
     public Set<Relationship> getRelationships() {
-        return Collections.singleton(SUCCESS);
+        return new HashSet<>(Arrays.asList(SUCCESS, DIAGNOSTICS));
     }
 
     @Override
@@ -309,7 +384,8 @@ public class SubscribeOpcUa extends AbstractProcessor {
                 .required(false)
                 .description(
                         "NodeId or JSON tag options. NodeIds are case-sensitive; namespace indexes"
-                                + " must match the server.")
+                            + " must match the server. Namespace URIs (nsu=) resolve on each new"
+                            + " session.")
                 .addValidator(
                         (subject, input, context) -> {
                             try {
@@ -389,6 +465,21 @@ public class SubscribeOpcUa extends AbstractProcessor {
                 requireProperty(context, PASSWORD, errors);
             }
         }
+        try {
+            long record = context.getProperty(RECORD_BYTES).asInteger();
+            if (record > context.getProperty(BUFFER_BYTES).asInteger()
+                    || record + 2 > context.getProperty(BATCH_BYTES).asInteger())
+                errors.add(
+                        new ValidationResult.Builder()
+                                .subject("Byte limits")
+                                .valid(false)
+                                .explanation(
+                                        "Maximum Record Bytes must fit Notification Buffer Bytes"
+                                                + " and Maximum FlowFile Bytes minus two")
+                                .build());
+        } catch (RuntimeException ignored) {
+            /* Individual property validators report invalid integers. */
+        }
         String applicationUri = context.getProperty(APPLICATION_URI).getValue();
         if (applicationUri != null) {
             try {
@@ -435,7 +526,12 @@ public class SubscribeOpcUa extends AbstractProcessor {
     }
 
     private void initializeBuffer(ProcessContext context) {
-        buffer = new NotificationBuffer(context.getProperty(BUFFER).asInteger());
+        buffer =
+                new NotificationBuffer(
+                        context.getProperty(BUFFER).asInteger(),
+                        context.getProperty(BUFFER_BYTES).asInteger(),
+                        context.getProperty(RECORD_BYTES).asInteger());
+        bufferBatchBytes = context.getProperty(BATCH_BYTES).asInteger();
         bufferEndpoint = context.getProperty(ENDPOINT).getValue();
         bufferSecurityPolicy = context.getProperty(SECURITY_POLICY).getValue();
         bufferSecurityMode = context.getProperty(SECURITY_MODE).getValue();
@@ -454,6 +550,7 @@ public class SubscribeOpcUa extends AbstractProcessor {
             }
             recovery.set(false);
             nextRetry = 0;
+            diagnosticSchedule = new DiagnosticSchedule();
             scheduledContext = context;
             running = true;
         }
@@ -482,30 +579,7 @@ public class SubscribeOpcUa extends AbstractProcessor {
 
     protected AutoCloseable openConnection(ProcessContext context, ConnectionAttempt generation)
             throws Exception {
-        List<TagDefinition> tags =
-                TagList.parse(
-                        context.getProperty(TAG_LIST).getValue(),
-                        individualTags(context.getProperties()),
-                        context.getProperty(SAMPLING).asInteger(),
-                        context.getProperty(SERVER_QUEUE).asInteger());
-        OpcSettings settings =
-                new OpcSettings(
-                        context.getProperty(ENDPOINT).getValue(),
-                        context.getProperty(APPLICATION_URI).getValue(),
-                        path(context, CERTIFICATE),
-                        path(context, PRIVATE_KEY),
-                        Optional.ofNullable(context.getProperty(KEY_PASSWORD).getValue())
-                                .orElse(""),
-                        path(context, PKI),
-                        context.getProperty(USERNAME).getValue(),
-                        context.getProperty(PASSWORD).getValue(),
-                        context.getProperty(PUBLISHING).asInteger(),
-                        context.getProperty(TIMEOUT).asInteger(),
-                        tags,
-                        new OpcSecurity(
-                                context.getProperty(SECURITY_POLICY).getValue(),
-                                context.getProperty(SECURITY_MODE).getValue(),
-                                context.getProperty(AUTHENTICATION).getValue()));
+        OpcSettings settings = settings(context);
         NotificationBuffer destination = buffer;
         return new OpcConnection(
                 settings,
@@ -516,8 +590,74 @@ public class SubscribeOpcUa extends AbstractProcessor {
                                         accept(destination, tag, value);
                                 }),
                 () -> generation.ifActive(() -> recovery.set(true)),
-                () -> generation.ifActive(() -> dataLost.incrementAndGet()),
-                generation);
+                () ->
+                        generation.ifActive(
+                                () -> {
+                                    dataLost.incrementAndGet();
+                                    totalDataLost.incrementAndGet();
+                                }),
+                generation,
+                diagnostics);
+    }
+
+    private static OpcSettings settings(ProcessContext context) {
+        List<TagDefinition> tags =
+                TagList.parse(
+                        context.getProperty(TAG_LIST).getValue(),
+                        individualTags(context.getProperties()),
+                        context.getProperty(SAMPLING).asInteger(),
+                        context.getProperty(SERVER_QUEUE).asInteger());
+        return new OpcSettings(
+                context.getProperty(ENDPOINT).getValue(),
+                context.getProperty(APPLICATION_URI).getValue(),
+                path(context, CERTIFICATE),
+                path(context, PRIVATE_KEY),
+                Optional.ofNullable(context.getProperty(KEY_PASSWORD).getValue()).orElse(""),
+                path(context, PKI),
+                context.getProperty(USERNAME).getValue(),
+                context.getProperty(PASSWORD).getValue(),
+                context.getProperty(PUBLISHING).asInteger(),
+                context.getProperty(TIMEOUT).asInteger(),
+                tags,
+                new OpcSecurity(
+                        context.getProperty(SECURITY_POLICY).getValue(),
+                        context.getProperty(SECURITY_MODE).getValue(),
+                        context.getProperty(AUTHENTICATION).getValue()));
+    }
+
+    protected AutoCloseable verifyConnection(
+            OpcSettings settings, ConnectionAttempt generation, ConnectionDiagnostics report)
+            throws Exception {
+        return new OpcConnection(
+                settings, (tag, value) -> {}, () -> {}, () -> {}, generation, report);
+    }
+
+    @Override
+    public List<ConfigVerificationResult> verify(
+            ProcessContext context,
+            org.apache.nifi.logging.ComponentLog logger,
+            Map<String, String> attributes) {
+        ConnectionDiagnostics report = new ConnectionDiagnostics(value -> redact(context, value));
+        ConnectionAttempt generation = new ConnectionAttempt();
+        ConfigVerificationResult.Builder result =
+                new ConfigVerificationResult.Builder()
+                        .verificationStepName("OPC UA subscription verification");
+        try (AutoCloseable verified = verifyConnection(settings(context), generation, report)) {
+            result.outcome(ConfigVerificationResult.Outcome.SUCCESSFUL)
+                    .explanation(
+                            "Authenticated, resolved tags and created monitored items. Temporary"
+                                    + " subscription is closed after verification. "
+                                    + redact(context, report.snapshot().toString()));
+        } catch (Exception e) {
+            result.outcome(ConfigVerificationResult.Outcome.FAILED)
+                    .explanation(
+                            failureDescription(context, e)
+                                    + "; "
+                                    + redact(context, report.snapshot().toString()));
+        } finally {
+            generation.cancel();
+        }
+        return Collections.singletonList(result.build());
     }
 
     private static Map<String, String> individualTags(Map<PropertyDescriptor, String> properties) {
@@ -536,10 +676,24 @@ public class SubscribeOpcUa extends AbstractProcessor {
 
     void accept(NotificationBuffer destination, TagDefinition tag, DataValue value) {
         try {
-            if (!destination.offer(NotificationJson.encode(tag, value))) dropped.incrementAndGet();
+            if (!destination.offer(
+                    NotificationJson.encode(tag, value, destination.maximumRecordBytes()))) {
+                dropped.incrementAndGet();
+                totalDropped.incrementAndGet();
+            }
         } catch (Exception e) {
             dropped.incrementAndGet();
+            totalDropped.incrementAndGet();
+            if (isOversized(e)) oversized.incrementAndGet();
+            else encodingErrors.incrementAndGet();
         }
+    }
+
+    private static boolean isOversized(Throwable error) {
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Throwable cause = error; cause != null && seen.add(cause); cause = cause.getCause())
+            if (cause instanceof NotificationJson.RecordTooLargeException) return true;
+        return false;
     }
 
     void acceptForTest(TagDefinition tag, DataValue value) {
@@ -561,7 +715,11 @@ public class SubscribeOpcUa extends AbstractProcessor {
             if (message != null && !message.isEmpty()) detail += ": " + message;
             details.add(detail);
         }
-        String description = details.toString();
+        String description = redact(context, details.toString());
+        return description.length() > 4096 ? description.substring(0, 4096) + "…" : description;
+    }
+
+    private static String redact(ProcessContext context, String description) {
         List<String> passwords = new ArrayList<>();
         for (PropertyDescriptor property : Arrays.asList(PASSWORD, KEY_PASSWORD)) {
             String password = context.getProperty(property).getValue();
@@ -571,6 +729,62 @@ public class SubscribeOpcUa extends AbstractProcessor {
         passwords.sort(Comparator.comparingInt(String::length).reversed());
         for (String password : passwords) description = description.replace(password, "[redacted]");
         return description.replaceAll("[\\p{Cntrl}\\u2028\\u2029]", " ");
+    }
+
+    private static Object redactMetadata(ProcessContext context, Object value) {
+        if (value instanceof String) return redact(context, (String) value);
+        if (value instanceof Map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            ((Map<?, ?>) value)
+                    .forEach(
+                            (key, item) ->
+                                    copy.put(String.valueOf(key), redactMetadata(context, item)));
+            return copy;
+        }
+        if (value instanceof List) {
+            List<Object> copy = new ArrayList<>();
+            for (Object item : (List<?>) value) copy.add(redactMetadata(context, item));
+            return copy;
+        }
+        return value;
+    }
+
+    Map<String, Object> diagnosticSnapshot(ProcessContext context) {
+        Map<String, Object> report = new LinkedHashMap<>();
+        Map<String, Object> current = diagnostics.snapshot();
+        report.put("observedAt", java.time.Instant.now().toString());
+        report.put(
+                "state",
+                !running
+                        ? "STOPPED"
+                        : !ownsSubscription()
+                                ? "STANDBY"
+                                : recovery.get()
+                                        ? "RETRYING"
+                                        : connection == null
+                                                ? "WAITING"
+                                                : Boolean.TRUE.equals(current.get("sessionActive"))
+                                                        ? "SUBSCRIBED"
+                                                        : "RECONNECTING");
+        report.put("connectionAttempts", connectionAttempts.get());
+        report.put("successfulConnections", successfulConnections.get());
+        report.put("subscriptionRecreations", Math.max(0, successfulConnections.get() - 1));
+        report.put("notificationsDropped", totalDropped.get());
+        report.put("oversizedNotifications", oversized.get());
+        report.put("encodingFailures", encodingErrors.get());
+        report.put("serverDataLossEvents", totalDataLost.get());
+        report.put("lastFailure", lastFailure);
+        report.put("connection", current);
+        if (buffer != null) {
+            Map<String, Object> buffered = buffer.snapshot();
+            buffered.put("endpoint", bufferEndpoint);
+            buffered.put("securityPolicy", bufferSecurityPolicy);
+            buffered.put("securityMode", bufferSecurityMode);
+            buffered.put("maximumFlowFileBytes", bufferBatchBytes);
+            buffered.put("maximumRecordBytes", buffer.maximumRecordBytes());
+            report.put("buffer", buffered);
+        }
+        return report;
     }
 
     @Override
@@ -594,21 +808,37 @@ public class SubscribeOpcUa extends AbstractProcessor {
                 recovery.set(false);
                 ConnectionAttempt generation = new ConnectionAttempt();
                 attempt = generation;
+                diagnostics = new ConnectionDiagnostics(value -> redact(context, value));
+                connectionAttempts.incrementAndGet();
                 if (!running || !ownsSubscription()) generation.cancel();
                 try {
                     generation.check();
                     connection = openConnection(context, generation);
                     generation.check();
+                    successfulConnections.incrementAndGet();
                 } catch (Exception e) {
                     generation.cancel();
                     closeConnection();
                     if (running && ownsSubscription()) {
                         recovery.set(true);
+                        lastFailure = failureDescription(context, e);
                         getLogger()
                                 .error(
                                         "Could not establish OPC UA subscription ({}); retrying"
                                                 + " after configured delay",
-                                        new Object[] {failureDescription(context, e)});
+                                        new Object[] {
+                                            lastFailure
+                                                    + "; stage="
+                                                    + diagnostics.snapshot().get("stage")
+                                                    + "; advertised endpoints="
+                                                    + redact(
+                                                            context,
+                                                            String.valueOf(
+                                                                    diagnostics
+                                                                            .snapshot()
+                                                                            .get(
+                                                                                    "advertisedEndpoints")))
+                                        });
                         context.yield();
                     }
                 }
@@ -634,44 +864,75 @@ public class SubscribeOpcUa extends AbstractProcessor {
                                 new Object[] {gaps});
             }
             final NotificationBuffer pending = buffer;
-            List<byte[]> records = pending.reserve(context.getProperty(BATCH).asInteger());
-            if (records.isEmpty()) {
+            List<byte[]> records =
+                    pending.reserve(context.getProperty(BATCH).asInteger(), bufferBatchBytes);
+            final DiagnosticSchedule reportSchedule = diagnosticSchedule;
+            final int diagnosticInterval = context.getProperty(DIAGNOSTICS_INTERVAL).asInteger();
+            final boolean emitDiagnostic =
+                    diagnosticInterval > 0
+                            && (reportSchedule.next == 0
+                                    || System.nanoTime() - reportSchedule.next >= 0)
+                            && diagnosticsPending.compareAndSet(false, true);
+            if (records.isEmpty() && !emitDiagnostic) {
                 context.yield();
                 return;
             }
             try {
-                FlowFile flow = session.create();
-                flow =
-                        session.write(
-                                flow,
-                                out -> {
-                                    out.write('[');
-                                    for (int i = 0; i < records.size(); i++) {
-                                        if (i > 0) out.write(',');
-                                        out.write(records.get(i));
-                                    }
-                                    out.write(']');
-                                });
-                Map<String, String> attributes = new HashMap<>();
-                attributes.put("mime.type", "application/json");
-                attributes.put("record.count", Integer.toString(records.size()));
-                attributes.put("opcua.endpoint", bufferEndpoint);
-                attributes.put("opcua.security.policy", bufferSecurityPolicy);
-                attributes.put("opcua.security.mode", bufferSecurityMode);
-                flow = session.putAllAttributes(flow, attributes);
-                session.getProvenanceReporter().receive(flow, bufferEndpoint);
-                session.transfer(flow, SUCCESS);
+                if (emitDiagnostic) {
+                    byte[] report =
+                            JSON.writeValueAsBytes(
+                                    redactMetadata(context, diagnosticSnapshot(context)));
+                    FlowFile diagnostic = session.create();
+                    diagnostic = session.write(diagnostic, out -> out.write(report));
+                    Map<String, String> diagnosticAttributes = new HashMap<>();
+                    diagnosticAttributes.put("mime.type", "application/json");
+                    diagnosticAttributes.put("opcua.type", "diagnostics");
+                    diagnostic = session.putAllAttributes(diagnostic, diagnosticAttributes);
+                    session.transfer(diagnostic, DIAGNOSTICS);
+                }
+                if (!records.isEmpty()) {
+                    FlowFile flow = session.create();
+                    flow =
+                            session.write(
+                                    flow,
+                                    out -> {
+                                        out.write('[');
+                                        for (int i = 0; i < records.size(); i++) {
+                                            if (i > 0) out.write(',');
+                                            out.write(records.get(i));
+                                        }
+                                        out.write(']');
+                                    });
+                    Map<String, String> attributes = new HashMap<>();
+                    attributes.put("mime.type", "application/json");
+                    attributes.put("record.count", Integer.toString(records.size()));
+                    attributes.put("opcua.endpoint", bufferEndpoint);
+                    attributes.put("opcua.security.policy", bufferSecurityPolicy);
+                    attributes.put("opcua.security.mode", bufferSecurityMode);
+                    flow = session.putAllAttributes(flow, attributes);
+                    session.getProvenanceReporter().receive(flow, bufferEndpoint);
+                    session.transfer(flow, SUCCESS);
+                }
                 session.commitAsync(
-                        () -> pending.acknowledge(records.size()),
+                        () -> {
+                            if (!records.isEmpty()) pending.acknowledge(records.size());
+                            if (emitDiagnostic) {
+                                reportSchedule.next =
+                                        System.nanoTime() + diagnosticInterval * 1000000000L;
+                                diagnosticsPending.set(false);
+                            }
+                        },
                         error -> {
-                            pending.release();
+                            if (!records.isEmpty()) pending.release();
+                            if (emitDiagnostic) diagnosticsPending.set(false);
                             getLogger()
                                     .error(
                                             "OPC UA FlowFile commit failed; notifications retained"
                                                     + " for retry");
                         });
-            } catch (RuntimeException e) {
-                pending.release();
+            } catch (Exception e) {
+                if (!records.isEmpty()) pending.release();
+                if (emitDiagnostic) diagnosticsPending.set(false);
                 session.rollback();
                 throw new ProcessException(
                         "Could not commit OPC UA batch; notifications retained for retry", e);

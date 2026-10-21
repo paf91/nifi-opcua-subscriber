@@ -602,4 +602,52 @@ class SecureSubscriptionTest {
                     "Closing one connection stopped another processor's transport");
         }
     }
+
+    @Test
+    void resolvesNamespaceUriAndReportsNegotiatedSettings() throws Exception {
+        ConnectionDiagnostics report = new ConnectionDiagnostics();
+        BlockingQueue<TagDefinition> tags = new LinkedBlockingQueue<>();
+        try (OpcConnection connection =
+                new OpcConnection(
+                        settings(
+                                dir.resolve("pki"),
+                                "test-password",
+                                "nsu=http://opcfoundation.org/UA/;i=2258"),
+                        (tag, value) -> {
+                            if (value.getStatusCode().isGood()) tags.offer(tag);
+                        },
+                        () -> {},
+                        () -> {},
+                        new ConnectionAttempt(),
+                        report)) {
+            TagDefinition tag = tags.poll(5, TimeUnit.SECONDS);
+            assertNotNull(tag);
+            assertEquals(new NodeId(0, 2258), tag.nodeId());
+            assertEquals("http://opcfoundation.org/UA/", tag.address().namespaceUri());
+            assertEquals("Subscribed", report.snapshot().get("stage"));
+            assertNotNull(report.snapshot().get("revisedPublishingIntervalMs"));
+            Map<?, ?> item = (Map<?, ?>) ((List<?>) report.snapshot().get("monitoredItems")).get(0);
+            assertEquals(tag.nodeId().toParseableString(), item.get("resolvedNodeId"));
+            assertTrue(((Number) item.get("revisedQueueSize")).intValue() > 0);
+        }
+        assertEquals(false, report.snapshot().get("sessionActive"));
+    }
+
+    @Test
+    void missingNamespaceFailsBeforeCreatingSubscription() throws Exception {
+        Exception failure =
+                assertThrows(
+                        Exception.class,
+                        () ->
+                                new OpcConnection(
+                                        settings(
+                                                dir.resolve("pki"),
+                                                "test-password",
+                                                "nsu=urn:no:such:namespace;i=2258"),
+                                        (tag, value) -> fail("No callback expected"),
+                                        () -> {},
+                                        () -> {}));
+        assertTrue(failure.toString().contains("does not contain"), failure.toString());
+        assertTrue(server.getSubscriptions().isEmpty());
+    }
 }

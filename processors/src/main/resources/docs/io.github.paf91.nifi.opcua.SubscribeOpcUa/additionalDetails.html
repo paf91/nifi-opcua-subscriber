@@ -24,6 +24,13 @@ PumpRunning | ns=2;s=Example.Pump.Running</pre>
 ]</pre>
 <h3>Individual properties</h3>
 <p>Alternatively, add a dynamic property named <strong>PumpRunning</strong> with value <code>ns=2;s=Example.Pump.Running</code>. Do not configure the same alias or NodeId twice across the bulk list and individual properties.</p>
+<h3>Namespace URIs and deadbands</h3>
+<p>Numeric addresses such as <code>ns=2;s=Temperature</code> keep using index 2. URI addresses such as <code>nsu=urn:example:minute;s=Temperature</code> resolve the server's NamespaceArray for each new session. Use the exact namespace for the intended data model; indexes do not define data frequency. URI subscriptions are recreated if a new session changes the namespace mapping. Missing URIs or duplicate resolved NodeIds fail the connection. Encode semicolons and percent signs in the URI as <code>%3B</code> and <code>%25</code>.</p>
+<pre>{"nodeId":"nsu=urn:example:minute;s=Temperature","deadbandType":"Absolute","deadbandValue":0.5}</pre>
+<p>Deadband types are None, Absolute and Percent. Absolute requires a finite nonnegative value; Percent requires 0–100 and the server's EURange property. Quality changes still produce notifications. A rejected filter fails the subscription; it is not silently removed.</p>
+<h3>Connection verification and monitoring</h3>
+<p>NiFi Verify opens a temporary session and subscription to check discovery, authentication/trust, namespace resolution and all configured monitored items. It closes them afterwards and emits no measurements. It may consume an additional server session. Results include endpoint choices, certificate expiry/fingerprints and revised settings.</p>
+<p>Set Diagnostics Interval (seconds) above zero to emit JSON objects on the diagnostics relationship. The default is zero (disabled), and the relationship is automatically terminated unless routed. Reports include session activity, keep-alive and notification receipt times, negotiated settings, namespaces, buffer usage and cumulative drops. A quiet tag is not necessarily disconnected. Reports can be delayed by NiFi backpressure, and counters reset with the processor instance. Metadata details are capped; settingsMayBeStale indicates that a new session may have invalidated the initial namespace/negotiation snapshot.</p>
 <h3>Types and connection settings</h3>
 <p>Data types are read from the server; do not append Float, Double or Boolean to the NodeId. Obtain the endpoint URL and the server's security/authentication settings separately. Defaults remain Basic256Sha256, SignAndEncrypt and Username/Password. For secured channels, supply a client certificate/key and PKI Directory; client and server must trust each other. Leave Application URI empty to derive it from the client certificate.</p>
 <h3>Endpoints without channel security</h3>
@@ -32,6 +39,6 @@ PumpRunning | ns=2;s=Example.Pump.Running</pre>
 <h3>Included demo</h3>
 <p>The local demo exposes <code>DemoSwitch | ns=2;s=Demo.Boolean</code>. Its addresses are separate from the fictional examples above.</p>
 <h3>Delivery limits</h3>
-<p>Notifications are buffered in memory. Stop/Start in the same JVM retains pending records; a JVM restart loses them. Buffers are local to each node. A full buffer drops new notifications. Primary-node failover can produce gaps or duplicates; the processor does not recover historical values.</p>
+<p>Notifications are buffered in memory. Stop/Start in the same JVM retains pending records; a JVM restart loses them. Buffers are local to each node. A full buffer drops new notifications. Defaults are 64 MiB of serialized buffered data, 1 MiB per record, and 4 MiB per success FlowFile. Count limits also apply. Maximum Record Bytes must fit the buffer and Maximum FlowFile Bytes minus two; batches account for brackets and commas. Oversized values are counted separately. These are serialized-data limits, not total JVM memory limits. Retained records use their original byte limits until drained. Primary-node failover can produce gaps or duplicates; the processor does not recover historical values.</p>
 </body>
 </html>
