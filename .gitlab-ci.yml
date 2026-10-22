@@ -44,6 +44,6 @@ nifi2-java21:
   extends: .build
   image: maven:3.9.11-eclipse-temurin-21
   script:
-    - mvn -e -B -ntp -Pnifi2 clean verify
+    - mvn -e -B -ntp -Pnifi2 -Dnifi.version=2.12.0 clean verify
     - python3 scripts/verify-interop-tests.py processors/target/surefire-reports
     - python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.2.nar 65

@@ -51,13 +51,14 @@ jobs:
         env:
           JAVA_TARGET: ${{ matrix.java }}
           PROFILE: ${{ matrix.profile }}
+          NIFI_TARGET: ${{ matrix.nifi }}
         run: |
           set -o pipefail
           mkdir -p dist/ci-logs
           docker run --rm --user "$(id -u):$(id -g)" -e MAVEN_CONFIG=/tmp/maven \
             -e OPCUA_OPEN62541_BINARY=/work/dist/open62541/open62541 \
             -v "$PWD:/work" -w /work "maven:3.9.11-eclipse-temurin-$JAVA_TARGET" \
-            mvn -e -B -ntp -Dmaven.repo.local=/tmp/m2/repository "-P$PROFILE" clean verify \
+            mvn -e -B -ntp -Dmaven.repo.local=/tmp/m2/repository "-P$PROFILE" "-Dnifi.version=$NIFI_TARGET" clean verify \
             2>&1 | tee "dist/ci-logs/$PROFILE-build.log"
       - name: Verify NAR and generate inventory
         env:

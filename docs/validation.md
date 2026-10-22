@@ -130,4 +130,17 @@ The five new shared request tests cover session-wait timeout, late session compl
 
 **1.0.2 has not been published.** Required before release: run the complete Java 8 and Java 21 builds, including the live Milo certificate matrix and independent open62541 suites, verify both NARs, and run NiFi runtime acceptance against their exact hashes. Java 21 compilation, real Java 8 execution, live connections and Docker acceptance were unavailable in this session. Older release acceptance does not validate these changes.
 
+### Target-runtime build follow-up — 22 October 2026
+
+Docker build containers became available during artifact preparation. The complete suites then ran on Temurin Java 8 and Java 21, with the independent open62541 fixture enabled. The live tests revealed two incorrect expectations, which were corrected: bypassing the certificate validator still leaves mandatory Java session-signature key-usage checks in place, and the modern test server returns `Bad_IdentityTokenInvalid` for an incorrect password. No production security checks were removed.
+
+| Build target | Passed | Skipped | Live coverage included |
+|---|---:|---:|---|
+| NiFi 1.23.2 / Java 8 | 349 | 1 optional external endpoint | 41 secure-session, 59 certificate-mode and 33 open62541 cases |
+| NiFi 2.12.0 / Java 21 | 348 | 1 optional external endpoint | The same live suites, plus two setup-outage regressions and eight SDK setup regressions |
+
+Modern NAR packaging also exposed the documentation plugin's dependency-POM reconstruction without active profiles. The documented modern build now passes `-Dnifi.version=2.12.0`; CI and release commands pass the selected target explicitly. This makes the plugin load the correct NiFi API and preserves enforced documentation generation. Both NARs passed packaging and base-bytecode verification.
+
+These results supersede the earlier Java-only validation limits for build candidates. Full NiFi runtime acceptance against the new hashes remains outstanding: creating its isolated Docker network was denied in this environment. GitLab has no assigned runner, so local build results are not GitLab CI results. Candidate artifacts must retain their source commit, checksums and validation evidence; stable 1.0.2 publication remains pending runtime acceptance.
+
 To repeat the network-free subset on an available JDK, use `mvn -o -B -ntp -Pnifi1 -Dtest='!SecureSubscriptionTest,!ServerCertificateValidationTest,!Open62541Test,!Open62541RecoveryTest' -Dsurefire.failIfNoSpecifiedTests=false verify`. Normal CI uses the complete test suites without these exclusions. Local evidence is retained in ignored `dist/certificate-validation-2026-10-22/`.

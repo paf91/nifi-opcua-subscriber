@@ -570,17 +570,6 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
 
     @OnScheduled
     public void start(ProcessContext context) throws Exception {
-        String validation = context.getProperty(SERVER_CERTIFICATE_VALIDATION).getValue();
-        if ("Certificate".equals(validation))
-            getLogger()
-                    .warn(
-                            "Server Certificate Validation is Certificate: server hostname/IP"
-                                    + " matching is disabled.");
-        else if ("None".equals(validation))
-            getLogger()
-                    .warn(
-                            "Server Certificate Validation is None: server certificates are not"
-                                    + " validated; server impersonation is possible.");
         synchronized (lifecycle) {
             if (buffer == null || buffer.size() == 0) {
                 initializeBuffer(context);

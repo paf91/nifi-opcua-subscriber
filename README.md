@@ -18,7 +18,7 @@ This is an independent community project, not an Apache Software Foundation prod
 | Build | NiFi target | Java target | Milo | Build |
 |---|---|---|---|---|
 | Legacy (default) | 1.23.2 | 8 | 0.6.16 | `mvn clean verify` |
-| Modern | 2.12.0 | 21 | 1.1.8 | `mvn -Pnifi2 clean verify` |
+| Modern | 2.12.0 | 21 | 1.1.8 | `mvn -Pnifi2 -Dnifi.version=2.12.0 clean verify` |
 
 **Version 1.0.2 is in preparation.** It adds configurable server certificate validation, bounds NiFi 2 monitored-item setup waits, stops later batches after cancellation, and preserves patch versions in release archive names. See the [changelog](CHANGELOG.md) and [validation record](docs/validation.md) for completed checks and outstanding release validation. Each release bundle records results for its exact NAR hashes.
 
@@ -38,7 +38,7 @@ python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.2.nar 
 For NiFi 2, use JDK 21:
 
 ```sh
-mvn -B -ntp -Pnifi2 clean verify
+mvn -B -ntp -Pnifi2 -Dnifi.version=2.12.0 clean verify
 python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.2.nar 65
 ```
 

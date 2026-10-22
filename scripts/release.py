@@ -153,7 +153,8 @@ def main():
             print('Building ' + target['profile'], flush=True)
             with (dest / 'build.log').open('w') as log:
                 image_id = docker(target['java'], ['mvn', '-B', '-ntp', '-Dmaven.repo.local=/tmp/m2/repository',
-                    '-Dproject.build.outputTimestamp=' + epoch, '-P' + target['profile'], 'clean', 'verify'], log)
+                    '-Dproject.build.outputTimestamp=' + epoch, '-P' + target['profile'],
+                    '-Dnifi.version=' + target['nifi'], 'clean', 'verify'], log)
             nar = source / 'nar/target' / target['artifact']
             run(['python3', source / 'scripts/verify-interop-tests.py',
                  source / 'processors/target/surefire-reports'], source)

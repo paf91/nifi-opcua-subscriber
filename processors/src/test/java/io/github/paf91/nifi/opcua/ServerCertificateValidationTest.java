@@ -67,8 +67,14 @@ class ServerCertificateValidationTest {
         }
         OpcSettings settings = settings(mode, pki, "test-password", encryptedTokenOnly);
         ConnectionDiagnostics report = new ConnectionDiagnostics();
-        boolean accepted =
+        // Bypassing the certificate validator does not bypass Java's mandatory signing-key
+        // usage check when Milo verifies the server's CreateSession signature.
+        boolean signatureRejectsKeyUsage =
                 mode == ServerCertificateValidation.NONE
+                        && scenario == Scenario.KEY_USAGE
+                        && !encryptedTokenOnly;
+        boolean accepted =
+                (mode == ServerCertificateValidation.NONE && !signatureRejectsKeyUsage)
                         || scenario == Scenario.VALID
                         || (mode == ServerCertificateValidation.CERTIFICATE
                                 && scenario == Scenario.HOSTNAME);
@@ -91,7 +97,10 @@ class ServerCertificateValidationTest {
                     expected = StatusCodes.Bad_CertificateTimeInvalid;
                     break;
                 case KEY_USAGE:
-                    expected = StatusCodes.Bad_CertificateUseNotAllowed;
+                    expected =
+                            signatureRejectsKeyUsage
+                                    ? StatusCodes.Bad_SecurityChecksFailed
+                                    : StatusCodes.Bad_CertificateUseNotAllowed;
                     break;
                 default:
                     break;
@@ -133,6 +142,7 @@ class ServerCertificateValidationTest {
         assertNotNull(code, failure.toString());
         assertTrue(
                 code.getValue() == StatusCodes.Bad_UserAccessDenied
+                        || code.getValue() == StatusCodes.Bad_IdentityTokenInvalid
                         || code.getValue() == StatusCodes.Bad_IdentityTokenRejected,
                 failure.toString());
     }

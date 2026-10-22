@@ -16,11 +16,13 @@ python3 scripts/nar-inventory.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.2.n
 Save the legacy NAR/reports outside target, switch to JDK 21, then:
 
 ```sh
-mvn -B -ntp -Pnifi2 clean verify
+mvn -B -ntp -Pnifi2 -Dnifi.version=2.12.0 clean verify
 python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.2.nar 65
 python3 scripts/nar-inventory.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.2.nar --output nar/target/dependency-inventory.json
 python3 scripts/format-java.py --check
 ```
+
+The explicit `-Dnifi.version=2.12.0` is required for the modern NAR build. The NAR plugin reconstructs dependency POMs without the command-line profile selection when choosing its documentation API. Supplying the version as a system property keeps documentation generation on the same NiFi API used for compilation. CI and the release builder pass this property automatically.
 
 To apply formatting, omit `--check`. The formatter downloads a pinned JAR from Maven Central and verifies its committed SHA-256 before execution; it is stored in ignored `.tools`. Formatting uses JDK 21 even when editing shared Java 8 sources.
 

@@ -3,12 +3,13 @@
 ## 1.0.2 — Certificate validation and setup fixes (in preparation)
 
 - Add Server Certificate Validation modes Full (default), Certificate (skip hostname/IP only) and None (insecure), for both NiFi adapters and encrypted username tokens. Existing flows retain full validation; None does not require a PKI directory.
-- Report the selected validation mode in connection diagnostics and NiFi Verify, and warn when scheduling with reduced validation. Client identity, channel protection and user authentication remain independently configured.
+- Report the selected validation mode in connection diagnostics and NiFi Verify. Explain validation modes in property help without emitting startup warnings for the selected mode. Client identity, channel protection and user authentication remain independently configured.
 - Add shared cryptographic and live-server regression matrices for certificate trust, hostname, URI, validity, usage, signatures and credential failures.
 - Bound NiFi 2 initial monitored-item creation and lazy operation-limit reads by Request Timeout, including session acquisition. Each service call gets its own deadline so a healthy large subscription can take longer overall.
 - Stop NiFi 2 monitored-item batching on cancellation or timeout and reject late read/create requests after cancellation. Preserve Milo's adaptive batching and automatic recovery error handling after initial setup.
 - Preserve the full patch version in release archive/checksum filenames, reject existing output before building, and retain the INCOMPLETE marker if packaging fails.
-- Version the reactor, demo, CI artifact paths and upgrade instructions as `1.0.2`. Exact Java 8/21 builds and live runtime acceptance are still required before publication; see the validation record.
+- Pass the NiFi target explicitly to NAR documentation generation in CI and release builds; this prevents the modern build from loading the legacy API after dependency POMs are reconstructed without active profiles.
+- Version the reactor, demo, CI artifact paths and upgrade instructions as `1.0.2`. Java 8/21 tests and packaging checks have passed; full NiFi runtime acceptance is still required before stable publication. See the validation record.
 
 ## 1.0.1 — Operation-limit fixes and release versioning (2026-10-21)
 
