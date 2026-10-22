@@ -39,11 +39,11 @@ nifi1-java8:
   script:
     - mvn -e -B -ntp -Pnifi1 clean verify
     - python3 scripts/verify-interop-tests.py processors/target/surefire-reports
-    - python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.1.nar 52
+    - python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.2.nar 52
 nifi2-java21:
   extends: .build
   image: maven:3.9.11-eclipse-temurin-21
   script:
     - mvn -e -B -ntp -Pnifi2 clean verify
     - python3 scripts/verify-interop-tests.py processors/target/surefire-reports
-    - python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.1.nar 65
+    - python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.2.nar 65

@@ -8,6 +8,7 @@
 | Security Policy | None, Basic128Rsa15, Basic256, Basic256Sha256 (default), Aes128_Sha256_RsaOaep, Aes256_Sha256_RsaPss |
 | Security Mode | None, Sign, SignAndEncrypt (default) |
 | Authentication | Username/Password (default), Anonymous |
+| Server Certificate Validation | Full (default), Certificate (skip hostname/IP only), None (insecure) |
 | Application URI | Optional override; derived from the client certificate for secured channels, otherwise defaults to `urn:nifi:opcua:subscriber` |
 | Client Certificate File | Absolute path to PEM certificate chain, leaf first, or a DER leaf certificate |
 | Client Private Key File | Absolute path to RSA PEM key (PKCS#1/PKCS#8) or unencrypted PKCS#8 DER |
@@ -27,11 +28,13 @@ These are OPC UA security settings for `opc.tcp`, independent of HTTPS/TLS on th
 | Any supported non-None policy / Sign | Anonymous or Username/Password | Required | Required | Only for Username/Password |
 | Any supported non-None policy / SignAndEncrypt | Anonymous or Username/Password | Required | Required | Only for Username/Password |
 
+The PKI requirements above apply to **Full** and **Certificate** validation. **None** ignores the PKI directory and bypasses server certificate validation. It does not remove client certificate/key or login requirements.
+
 **Username/password without certificates:** select None, None and Username/Password, set your credentials and Tags, and leave certificate/key/PKI properties unset. If the server advertises an encrypted username-token policy, startup asks for a PKI Directory containing the trusted server certificate. This protects the password token even though channel data is unencrypted; no client certificate is required. The server advertises token protection separately from channel protection, and the client follows that token policy.
 
 **Anonymous without certificates:** select None, None and Anonymous. Set Endpoint URL and Tags. Leave certificate/key/PKI and username/password unset.
 
-**Secured channels:** the existing Basic256Sha256 / SignAndEncrypt / Username/Password defaults are unchanged. Anonymous login on a secured channel still requires the application certificate and mutual trust. Sign authenticates messages without encrypting their contents. None with an unencrypted username token sends credentials without encryption; choose it only when that matches the intended network configuration. Basic128Rsa15 and Basic256 are explicit legacy compatibility options. This processor supports the six listed RSA/None policies, not every OPC UA profile or identity-token type; X.509 user authentication, issued tokens and HTTPS transport are outside this implementation.
+**Secured channels:** the existing Basic256Sha256 / SignAndEncrypt / Username/Password defaults are unchanged. Anonymous login on a secured channel still requires the application certificate. Full and Certificate validation require server trust as well. Sign authenticates messages without encrypting their contents. None with an unencrypted username token sends credentials without encryption; choose it only when that matches the intended network configuration. Basic128Rsa15 and Basic256 are explicit legacy compatibility options. This processor supports the six listed RSA/None policies, not every OPC UA profile or identity-token type; X.509 user authentication, issued tokens and HTTPS transport are outside this implementation.
 
 Policy None requires mode None. Other policies require Sign or SignAndEncrypt. Unavailable policy/mode/login combinations fail with a configuration-specific message. Stop, edit and restart to apply settings. Old buffered records keep their original endpoint and security attributes until drained.
 
@@ -39,7 +42,7 @@ Policy None requires mode None. Other policies require Sign or SignAndEncrypt. U
 
 Use sensitive NiFi parameters for passwords. Paths refer to the **NiFi server filesystem**, not your browser's filesystem. The NiFi service account needs read access to the certificate/key and access to the PKI directory. When channel security is enabled, the certificate must be valid, have an RSA key of at least 2048 bits, and match the private key. Its single URI subject alternative name identifies this OPC UA client; it is not the server endpoint. Application URI is derived from that certificate, and any explicit override must match.
 
-The PKI Directory holds trusted server certificates and certificate authorities, separately from your client certificate and key. It is not another username/password credential. Trust is mutual: the OPC UA administrator must trust the client certificate, and NiFi must trust the server certificate or its CA. Populate the PKI structure before starting:
+The PKI Directory holds trusted server certificates and certificate authorities, separately from your client certificate and key. It is not another username/password credential. With Full or Certificate validation on a secured channel, trust is mutual: the OPC UA administrator must trust the client certificate, and NiFi must trust the server certificate or its CA. Populate the PKI structure before starting:
 
 ```text
 pki/
@@ -49,7 +52,19 @@ pki/
   issuers/crl/     applicable intermediate CA revocation lists
 ```
 
-All Milo validation checks are enabled, including server hostname, Application URI, validity, certificate usage and revocation checks. A CA-signed chain may require its CRLs. Obtain certificates/CRLs from the server administrator; verify identity before trusting them. There is no trust-all switch. Discovery itself may use an unsecured discovery endpoint; the selected session endpoint must still use the required security settings. If discovery advertises an unreachable hostname, fix server endpoint configuration or network/DNS routing.
+**Server Certificate Validation** controls verification independently of Security Policy, Security Mode and Authentication:
+
+| Mode | Server certificate checks | PKI |
+|---|---|---|
+| Full (default) | Trust chain, signatures, validity, certificate usage, revocation, Application URI and endpoint hostname/IP | Required when the server certificate protects the channel or username token |
+| Certificate | Same checks as Full, except the endpoint hostname/IP match | Same as Full; direct server-certificate trust or CA trust is supported |
+| None (insecure) | Bypasses the server certificate validator, including trust, validity, hostname/IP and Application URI checks | Unused; no trust directory is opened or updated |
+
+For `Bad_CertificateHostNameInvalid`, first correct the server's advertised endpoint or certificate SAN. A literal IP endpoint needs that IP in an IPAddress SAN; a DNS SAN resolving to that IP does not match it. **Certificate** can accommodate a known hostname/IP mismatch while retaining certificate trust and Application URI checks. The server's advertised Application URI must still match its certificate URI SAN. The processor's **Application URI** identifies the client and cannot repair a server identity mismatch.
+
+**None permits server impersonation**, even with SignAndEncrypt: encryption alone does not establish who receives the credentials and data. It does not disable Milo's channel/session signature checks, endpoint/certificate consistency checks, client identity checks or server-side authentication. A server rejecting the client's certificate is unaffected. Reduced validation produces a warning when scheduled; Verify and connection diagnostics report the selected mode. Stop, edit and restart to change it. Existing flows default to Full.
+
+A CA-signed chain may require its CRLs in Full and Certificate modes. Obtain certificates/CRLs from the server administrator; verify identity before trusting them. No mode automatically adds certificates to the trust list. Discovery itself may use an unsecured discovery endpoint; the selected session endpoint must still use the required security settings. Skipping hostname validation does not repair routing: if discovery advertises an unreachable hostname, fix server endpoint configuration or network/DNS routing. Full cannot provide server authentication on a None/None channel with anonymous access or an unencrypted username token, where no server certificate is used for protection.
 
 NiFi administrators must grant this processor's filesystem permissions in secured deployments. It reads private-key material and initializes the PKI store; those files are never put in FlowFiles.
 
@@ -110,10 +125,11 @@ NodeIds are case-sensitive. Whitespace around a list entry is trimmed; punctuati
 | Security Policy | Yes | Basic256Sha256 |
 | Security Mode | Yes | SignAndEncrypt |
 | Authentication | Yes | Username/Password |
+| Server Certificate Validation | Yes | Full; Certificate skips hostname/IP; None is insecure |
 | Client Certificate File | For Sign / SignAndEncrypt | Absolute host path |
 | Client Private Key File | For Sign / SignAndEncrypt | Absolute host path |
 | Private Key Password | No | Unset; sensitive |
-| PKI Directory | For secured channels or encrypted username tokens | Absolute host path; directory may be initialized by Milo |
+| PKI Directory | With Full/Certificate, for secured channels or encrypted username tokens | Absolute host path; directory may be initialized by Milo; unused with validation None |
 | Username | For Username/Password | Unset |
 | Password | For Username/Password | Unset; sensitive |
 | Application URI | No | Certificate URI SAN, or `urn:nifi:opcua:subscriber` without channel security |

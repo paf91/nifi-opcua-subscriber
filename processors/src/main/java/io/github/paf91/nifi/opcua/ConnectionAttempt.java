@@ -25,6 +25,12 @@ final class ConnectionAttempt {
         if (!cancelled) action.run();
     }
 
+    /** Submit a nonblocking request atomically with respect to cancellation. */
+    synchronized <T> T callIfActive(java.util.function.Supplier<T> action) {
+        check();
+        return action.get();
+    }
+
     <T> T await(CompletableFuture<T> future, long timeoutMillis) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         try {

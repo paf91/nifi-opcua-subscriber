@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.*;
         "Subscribes to OPC UA Value changes with configurable security and anonymous or"
             + " username/password authentication. Defaults to Basic256Sha256 / SignAndEncrypt."
             + " Paste a list of NodeIds into Tags, or add individual tag properties. Outputs JSON"
-            + " arrays. Secured connections require mutual certificate trust. Buffers are in"
+            + " arrays. Full server certificate validation is enabled by default. Buffers are in"
             + " memory; overflow drops newest notifications and raises a bulletin.")
 @DynamicProperty(
         name = "Tag alias",
@@ -150,6 +150,32 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
                             + " exactly match the certificate.",
                     false,
                     false);
+    public static final PropertyDescriptor SERVER_CERTIFICATE_VALIDATION =
+            new PropertyDescriptor.Builder()
+                    .name("Server Certificate Validation")
+                    .description(
+                            "Full verifies server certificate trust, validity, usage, revocation,"
+                                    + " Application URI and endpoint hostname/IP. Certificate skips"
+                                    + " only the hostname/IP match. None bypasses the server"
+                                    + " certificate validator and permits server impersonation."
+                                    + " Applies also to encrypted username tokens on an unsecured"
+                                    + " channel. Does not change channel security, client identity"
+                                    + " requirements or user authentication.")
+                    .required(true)
+                    .allowableValues(
+                            new AllowableValue(
+                                    "Full", "Full", "All server certificate checks (recommended)."),
+                            new AllowableValue(
+                                    "Certificate",
+                                    "Certificate",
+                                    "All checks except the server hostname/IP match."),
+                            new AllowableValue(
+                                    "None",
+                                    "None (insecure)",
+                                    "Skip server certificate validation; server impersonation is"
+                                            + " possible."))
+                    .defaultValue("Full")
+                    .build();
     public static final PropertyDescriptor CERTIFICATE =
             text(
                     "Client Certificate File",
@@ -178,9 +204,10 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
                         + " key location. Put the approved OPC server certificate in trusted/certs;"
                         + " for a CA chain also supply issuer certificates and CRLs. This lets NiFi"
                         + " verify the server, while your client certificate lets the server verify"
-                        + " NiFi. All certificate checks remain enabled; certificates are never"
-                        + " automatically trusted. Required for secured channels, and when an"
-                        + " unencrypted endpoint encrypts username tokens with its certificate.",
+                        + " NiFi. Required with Full or Certificate validation for secured"
+                        + " channels, and when an unencrypted endpoint encrypts username tokens"
+                        + " with its certificate. Unused when Server Certificate Validation is"
+                        + " None; no certificates are automatically added to the trust list.",
                     false,
                     false);
     public static final PropertyDescriptor TAG_LIST =
@@ -316,6 +343,7 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
                     SECURITY_POLICY,
                     SECURITY_MODE,
                     AUTHENTICATION,
+                    SERVER_CERTIFICATE_VALIDATION,
                     TAG_LIST,
                     CERTIFICATE,
                     PRIVATE_KEY,
@@ -457,8 +485,10 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
         }
         if (security != null) {
             if (security.requiresClientIdentity()) {
-                for (PropertyDescriptor required : Arrays.asList(CERTIFICATE, PRIVATE_KEY, PKI))
+                for (PropertyDescriptor required : Arrays.asList(CERTIFICATE, PRIVATE_KEY))
                     requireProperty(context, required, errors);
+                if (!"None".equals(context.getProperty(SERVER_CERTIFICATE_VALIDATION).getValue()))
+                    requireProperty(context, PKI, errors);
             }
             if (security.usernameAuthentication()) {
                 requireProperty(context, USERNAME, errors);
@@ -540,6 +570,17 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
 
     @OnScheduled
     public void start(ProcessContext context) throws Exception {
+        String validation = context.getProperty(SERVER_CERTIFICATE_VALIDATION).getValue();
+        if ("Certificate".equals(validation))
+            getLogger()
+                    .warn(
+                            "Server Certificate Validation is Certificate: server hostname/IP"
+                                    + " matching is disabled.");
+        else if ("None".equals(validation))
+            getLogger()
+                    .warn(
+                            "Server Certificate Validation is None: server certificates are not"
+                                    + " validated; server impersonation is possible.");
         synchronized (lifecycle) {
             if (buffer == null || buffer.size() == 0) {
                 initializeBuffer(context);
@@ -622,7 +663,9 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
                 new OpcSecurity(
                         context.getProperty(SECURITY_POLICY).getValue(),
                         context.getProperty(SECURITY_MODE).getValue(),
-                        context.getProperty(AUTHENTICATION).getValue()));
+                        context.getProperty(AUTHENTICATION).getValue()),
+                ServerCertificateValidation.parse(
+                        context.getProperty(SERVER_CERTIFICATE_VALIDATION).getValue()));
     }
 
     protected AutoCloseable verifyConnection(
@@ -645,7 +688,7 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
         try (AutoCloseable verified = verifyConnection(settings(context), generation, report)) {
             result.outcome(ConfigVerificationResult.Outcome.SUCCESSFUL)
                     .explanation(
-                            "Authenticated, resolved tags and created monitored items. Temporary"
+                            "Opened session, resolved tags and created monitored items. Temporary"
                                     + " subscription is closed after verification. "
                                     + redact(context, report.snapshot().toString()));
         } catch (Exception e) {
@@ -830,6 +873,10 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
                                             lastFailure
                                                     + "; stage="
                                                     + diagnostics.snapshot().get("stage")
+                                                    + "; serverCertificateValidation="
+                                                    + diagnostics
+                                                            .snapshot()
+                                                            .get("serverCertificateValidation")
                                                     + "; advertised endpoints="
                                                     + redact(
                                                             context,

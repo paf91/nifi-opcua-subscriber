@@ -6,8 +6,8 @@
 
 | Target | Artifact |
 |---|---|
-| NiFi 1.23.2 / Java 8 | `nifi-opcua-subscriber-1.23.2-1.0.1.nar` |
-| NiFi 2.12.0 / Java 21 | `nifi-opcua-subscriber-2.12.0-1.0.1.nar` |
+| NiFi 1.23.2 / Java 8 | `nifi-opcua-subscriber-1.23.2-1.0.2.nar` |
+| NiFi 2.12.0 / Java 21 | `nifi-opcua-subscriber-2.12.0-1.0.2.nar` |
 
 Build from source or obtain a tested CI/release artifact. Check the SHA-256 against the accompanying checksum manifest. A filename containing SNAPSHOT is not a unique release identity: keep the source commit and checksum with every deployment. Do not unpack the NAR or install individual dependency JARs.
 
@@ -51,8 +51,10 @@ These mechanisms are documented in the [NiFi 1.23.2 administration guide](https:
 1. Record the installed NAR checksum, processor properties and flow configuration using your normal secure backup procedure.
 2. Stop the source and drain pending data according to your ingestion policy. NiFi restart and processor version changes discard this processor's in-memory pending records.
 3. Install the new version alongside the previous version under their distinct filenames. Install the matching NiFi target on every cluster node. Restart NiFi when using a custom library directory; a new bundle version can also use autoload.
-4. On the stopped `SubscribeOpcUa` processor, use **Change version** and select **1.0.1**. Confirm that its bundle group is `io.github.paf91.nifi`, artifact is `nifi-opcua-subscriber-nar`, and version is `1.0.1`. NiFi stores this bundle version with the flow.
+4. On the stopped `SubscribeOpcUa` processor, use **Change version** and select **1.0.2**. Confirm that its bundle group is `io.github.paf91.nifi`, artifact is `nifi-opcua-subscriber-nar`, and version is `1.0.2`. NiFi stores this bundle version with the flow.
 5. Check properties, relationships and validation, run Verify, then start and confirm fresh data. Once no components reference the previous bundle, remove its NAR during a maintenance restart.
+
+The new **Server Certificate Validation** property defaults to **Full**, preserving existing checks when upgrading from 1.0.1 or earlier. Review any deliberate change to Certificate or None before starting.
 
 See NiFi's [component version instructions](https://nifi.apache.org/nifi-docs/user-guide.html#changing-component-versions). This applies to the existing GitHub-aligned processor type; older private processor types need the [identity migration](namespace-migration.md).
 

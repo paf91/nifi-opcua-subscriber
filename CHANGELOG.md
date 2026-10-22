@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.2 — Certificate validation and setup fixes (in preparation)
+
+- Add Server Certificate Validation modes Full (default), Certificate (skip hostname/IP only) and None (insecure), for both NiFi adapters and encrypted username tokens. Existing flows retain full validation; None does not require a PKI directory.
+- Report the selected validation mode in connection diagnostics and NiFi Verify, and warn when scheduling with reduced validation. Client identity, channel protection and user authentication remain independently configured.
+- Add shared cryptographic and live-server regression matrices for certificate trust, hostname, URI, validity, usage, signatures and credential failures.
+- Bound NiFi 2 initial monitored-item creation and lazy operation-limit reads by Request Timeout, including session acquisition. Each service call gets its own deadline so a healthy large subscription can take longer overall.
+- Stop NiFi 2 monitored-item batching on cancellation or timeout and reject late read/create requests after cancellation. Preserve Milo's adaptive batching and automatic recovery error handling after initial setup.
+- Preserve the full patch version in release archive/checksum filenames, reject existing output before building, and retain the INCOMPLETE marker if packaging fails.
+- Version the reactor, demo, CI artifact paths and upgrade instructions as `1.0.2`. Exact Java 8/21 builds and live runtime acceptance are still required before publication; see the validation record.
+
 ## 1.0.1 — Operation-limit fixes and release versioning (2026-10-21)
 
 - Include the NiFi 1 adaptive monitored-item batching fix and regression tests for missing/stale server limits, cancellation and callback routing.
@@ -61,4 +71,4 @@ Existing demo flows are not overwritten by the seeder. After rebuilding the demo
 
 - Separate legacy and modern NARs, secured subscriptions, JSON output and local NiFi demo.
 
-Preview entries describe historical development milestones built as `1.0.0-SNAPSHOT`. The current Maven version is `1.0.1`; validation limits remain documented per release.
+Preview entries describe historical development milestones built as `1.0.0-SNAPSHOT`. The current Maven version is `1.0.2`; validation limits remain documented per release.

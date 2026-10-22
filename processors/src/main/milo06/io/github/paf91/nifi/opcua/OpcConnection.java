@@ -26,7 +26,6 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.*;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.*;
 import org.eclipse.milo.opcua.stack.core.types.structured.*;
-import org.eclipse.milo.opcua.stack.core.util.validation.ValidationCheck;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -73,6 +72,7 @@ final class OpcConnection implements AutoCloseable {
             throws Exception {
         this.attempt = attempt;
         this.diagnostics = diagnostics;
+        diagnostics.serverCertificateValidation(settings.serverCertificateValidation());
         timeout = settings.requestTimeout();
         try {
             attempt.check();
@@ -90,15 +90,15 @@ final class OpcConnection implements AutoCloseable {
             diagnostics.selected(endpoint);
             diagnostics.stage("Configuring server trust");
             ClientCertificateValidator validator = rejectUnconfiguredTrust();
-            if (settings.security().requiresServerTrust(endpoint)) {
+            if (settings.serverCertificateValidation() == ServerCertificateValidation.NONE) {
+                validator = serverValidator(settings.serverCertificateValidation(), null);
+            } else if (settings.security().requiresServerTrust(endpoint)) {
                 if (settings.pki() == null)
                     throw new IllegalArgumentException(
                             "PKI Directory is required to validate this endpoint's server"
                                     + " certificate, including encrypted username tokens");
                 trust = new DefaultTrustListManager(settings.pki().toFile());
-                validator =
-                        new DefaultClientCertificateValidator(
-                                trust, ValidationCheck.ALL_OPTIONAL_CHECKS);
+                validator = serverValidator(settings.serverCertificateValidation(), trust);
             }
             attempt.check();
             client =
@@ -395,6 +395,23 @@ final class OpcConnection implements AutoCloseable {
                     throws UaException {
                 validateCertificateChain(chain);
             }
+        };
+    }
+
+    static ClientCertificateValidator serverValidator(
+            ServerCertificateValidation validation, TrustListManager trust) {
+        if (validation != ServerCertificateValidation.NONE)
+            return new DefaultClientCertificateValidator(trust, validation.optionalChecks());
+        // Explicit opt-in only; channel/session signature checks remain Milo's responsibility.
+        return new ClientCertificateValidator() {
+            @Override
+            public void validateCertificateChain(List<java.security.cert.X509Certificate> chain) {}
+
+            @Override
+            public void validateCertificateChain(
+                    List<java.security.cert.X509Certificate> chain,
+                    String applicationUri,
+                    String... hosts) {}
         };
     }
 

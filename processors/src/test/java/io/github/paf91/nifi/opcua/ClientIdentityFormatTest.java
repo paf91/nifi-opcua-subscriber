@@ -64,4 +64,34 @@ class ClientIdentityFormatTest {
                 key.getPrivate().getEncoded(), loaded.keyPair().getPrivate().getEncoded());
         assertArrayEquals(new char[password.length], password);
     }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"key", "uri"})
+    void disablingServerValidationStillValidatesClientIdentity(String mismatch) throws Exception {
+        Path certFile = dir.resolve("client.der"), keyFile = dir.resolve("client.key");
+        Files.write(certFile, certificate.getEncoded());
+        PrivateKey privateKey = key.getPrivate();
+        if ("key".equals(mismatch)) {
+            KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+            generator.initialize(2048);
+            privateKey = generator.generateKeyPair().getPrivate();
+        }
+        Files.write(keyFile, privateKey.getEncoded());
+        OpcSettings settings =
+                new OpcSettings(
+                        "opc.tcp://localhost:4840",
+                        "uri".equals(mismatch) ? "urn:wrong:client" : null,
+                        certFile,
+                        keyFile,
+                        "",
+                        null,
+                        "user",
+                        "test-password",
+                        100,
+                        1000,
+                        java.util.Collections.emptyList(),
+                        OpcSecurity.DEFAULT,
+                        ServerCertificateValidation.NONE);
+        assertThrows(IllegalArgumentException.class, () -> ClientIdentity.load(settings));
+    }
 }

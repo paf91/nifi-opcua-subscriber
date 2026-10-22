@@ -21,8 +21,58 @@ def checksum(path):
 
 
 def manifest(directory):
-    paths = sorted(p for p in directory.rglob('*') if p.is_file() and p.name != 'SHA256SUMS')
+    paths = sorted(p for p in directory.rglob('*') if p.is_file() and p.name != 'SHA256SUMS'
+                   and p != directory / 'INCOMPLETE')
     (directory / 'SHA256SUMS').write_text(''.join(checksum(p) + '  ' + p.relative_to(directory).as_posix() + '\n' for p in paths))
+
+
+def archive_paths(output):
+    # A patch version is part of the name, not a suffix to replace.
+    archive = output.with_name(output.name + '.tar.gz')
+    return archive, archive.with_name(archive.name + '.sha256')
+
+
+def check_archive_paths(output):
+    paths = archive_paths(output)
+    for path in paths:
+        if path.exists() or path.is_symlink():
+            raise FileExistsError('Refusing to overwrite existing release output: ' + str(path))
+    return paths
+
+
+def prepare_output(output):
+    check_archive_paths(output)  # Fail before exporting or building either NAR.
+    output.mkdir(parents=True, exist_ok=False)
+    (output / 'INCOMPLETE').write_text('Build in progress or failed; do not distribute.\n')
+
+
+def finish_bundle(output):
+    archive, digest = check_archive_paths(output)
+    marker = output / 'INCOMPLETE'
+    if not marker.is_file():
+        raise ValueError('Release output must have an INCOMPLETE marker before packaging')
+    manifest(output)
+    published = []
+    try:
+        with tempfile.TemporaryDirectory(prefix='.' + output.name + '-', dir=output.parent) as directory:
+            temporary = Path(directory)
+            packed = temporary / archive.name
+            with tarfile.open(packed, 'w:gz') as tar:
+                tar.add(output, arcname='nifi-opcua-subscriber-release',
+                        filter=lambda entry: None if entry.name == 'nifi-opcua-subscriber-release/INCOMPLETE' else entry)
+            digest_file = temporary / digest.name
+            digest_file.write_text(checksum(packed) + '  ' + archive.name + '\n')
+            # Same-filesystem hard links publish complete files without overwriting a path
+            # created after preflight. Keep INCOMPLETE until both files exist successfully.
+            for source, destination in ((packed, archive), (digest_file, digest)):
+                os.link(source, destination)
+                published.append(destination)
+            marker.unlink()
+    except BaseException:
+        for path in reversed(published):
+            path.unlink()
+        raise
+    return archive
 
 
 def build_targets(pom):
@@ -60,8 +110,7 @@ def main():
     output = args.output.resolve()
     if ROOT / 'dist' not in output.parents:
         parser.error('Output must be inside ignored dist/')
-    output.mkdir(parents=True, exist_ok=False)
-    (output / 'INCOMPLETE').write_text('Build in progress or failed; do not distribute.\n')
+    prepare_output(output)
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     epoch = subprocess.check_output(['git', 'show', '-s', '--format=%ct', 'HEAD'], cwd=ROOT, text=True).strip()
     if args.output_timestamp is not None:
@@ -133,14 +182,7 @@ def main():
     if report['jarsWithoutCoordinates']:
         raise RuntimeError('Unidentified JARs require review before release packaging')
     (output / 'build-metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
-    (output / 'INCOMPLETE').unlink()
-    manifest(output)
-    archive = output.with_suffix('.tar.gz')
-    if archive.exists():
-        raise RuntimeError('Refusing to overwrite existing archive: ' + str(archive))
-    with tarfile.open(archive, 'w:gz') as tar:
-        tar.add(output, arcname='nifi-opcua-subscriber-release')
-    archive.with_suffix('.gz.sha256').write_text(checksum(archive) + '  ' + archive.name + '\n')
+    archive = finish_bundle(output)
     print('Local release bundle: ' + str(archive))
     print('Nothing was published or deployed.')
 

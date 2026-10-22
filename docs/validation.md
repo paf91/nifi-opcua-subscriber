@@ -113,3 +113,21 @@ The Preview 5 release bundle records the exact committed source, NAR hashes, JDK
 ## Version 1.0.1
 
 Version 1.0.1 includes both verified fixes from Preview 5: adaptive NiFi 1 requests for missing/stale monitored-item limits, and required independent-server execution in both CI providers and release builds. It uses explicit `1.0.1` Maven/NAR coordinates. The matching release bundle records the exact source commit, rebuilt NAR hashes, build results and real NiFi smoke checks; historical results above retain their original versions and hashes.
+
+## Unreleased certificate validation modes — 22 October 2026
+
+Local verification used OpenJDK 17.0.20.1 and Maven 3.6.3 with the `nifi1` profile and Java 8 compilation target: 211 Java tests passed, with one optional external endpoint test skipped. These include 30 real certificate/CA-chain checks, property/default validation, Verify settings propagation and client identity rejection in insecure mode. The NiFi 1 NAR packaged successfully, its generated property metadata includes Full/Certificate/None with Full as default, and bytecode validation passed. Python utilities (24 tests), Java formatting and repository checks passed.
+
+Live server tests could not run in this session: the sandbox denied loopback socket creation (`Operation not permitted`). Docker and network access were unavailable, and only Java 17 was installed. The 59-case live validation matrix was added to both profiles' normal test builds, but its connection outcomes remain unverified here. Exact Java 8 and Java 21 runs, the NiFi 2 build, independent open62541 tests and full NiFi runtime acceptance must run before releasing this change. The local Java 17 build is development evidence, not a tested Java 8 release; it does not replace the published 1.0.1 artifacts or inherit their acceptance results.
+
+## Version 1.0.2 preparation — 22 October 2026
+
+This source version combines the certificate-validation modes above with the three confirmed review fixes: NiFi 2 setup waits that exceeded Request Timeout during session recovery, later monitored-item batches submitted after cancellation, and release archives that lost the patch version. Initial NiFi 2 service calls now include session acquisition in their individual deadlines. Timeout and cancellation stop partition processing; normal adaptive batching and established-session recovery retain Milo's handling.
+
+Available checks passed on Java 17 with the NiFi 1 profile targeting Java 8 bytecode: **216 tests passed and one optional external-endpoint test was skipped**. Live suites were explicitly excluded because socket creation is denied in this environment. The offline `clean verify` build produced a development NAR with 31 bundled JARs and 15,707 base classes, all at class-file version 52 or lower. Formatting, project checks and **29 Python tests** passed.
+
+The five new shared request tests cover session-wait timeout, late session completion, cancellation/interrupt cleanup, independent batch deadlines and service-error handling. Five release-packaging tests cover distinct patch versions, checksums/manifests, existing-output rejection, packaging failure, and publication failure/races. Eight additional Milo 1 SDK tests cover partition boundaries, lazy operation-limit reads, late sends, adaptive batching and recovery handling. Two new open62541 outage cases exercise initial setup immediately after disconnection and after eight seconds of reconnect attempts. The Milo 1 and live tests are written but have not been executed here.
+
+**1.0.2 has not been published.** Required before release: run the complete Java 8 and Java 21 builds, including the live Milo certificate matrix and independent open62541 suites, verify both NARs, and run NiFi runtime acceptance against their exact hashes. Java 21 compilation, real Java 8 execution, live connections and Docker acceptance were unavailable in this session. Older release acceptance does not validate these changes.
+
+To repeat the network-free subset on an available JDK, use `mvn -o -B -ntp -Pnifi1 -Dtest='!SecureSubscriptionTest,!ServerCertificateValidationTest,!Open62541Test,!Open62541RecoveryTest' -Dsurefire.failIfNoSpecifiedTests=false verify`. Normal CI uses the complete test suites without these exclusions. Local evidence is retained in ignored `dist/certificate-validation-2026-10-22/`.

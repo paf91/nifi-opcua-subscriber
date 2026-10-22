@@ -47,10 +47,19 @@ class SecureSubscriptionTest {
         Security.addProvider(new BouncyCastleProvider());
         KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
         g.initialize(2048);
-        clientKey = g.generateKeyPair();
         KeyPair serverKey = g.generateKeyPair();
+        startServer(usernameTokenPolicy, serverKey, certificate(serverKey, "urn:test:server"));
+    }
+
+    void startServer(
+            String usernameTokenPolicy, KeyPair serverKey, X509Certificate serverCertificate)
+            throws Exception {
+        Security.addProvider(new BouncyCastleProvider());
+        KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
+        g.initialize(2048);
+        clientKey = g.generateKeyPair();
         clientCert = certificate(clientKey, "urn:test:client");
-        serverCert = certificate(serverKey, "urn:test:server");
+        serverCert = serverCertificate;
         Files.write(dir.resolve("client.der"), clientCert.getEncoded());
         try (JcaPEMWriter w =
                 new JcaPEMWriter(Files.newBufferedWriter(dir.resolve("client.pem")))) {

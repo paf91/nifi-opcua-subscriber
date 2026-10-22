@@ -109,6 +109,66 @@ class OpcSecurityTest {
         }
     }
 
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(ServerCertificateValidation.class)
+    void validationModeOnlyChangesTheTrustDirectoryRequirement(ServerCertificateValidation mode) {
+        TestRunner runner = ProcessorTest.configured(new ProcessorTest.OfflineProcessor());
+        assertEquals(
+                "Full",
+                runner.getProcessContext()
+                        .getProperty(SubscribeOpcUa.SERVER_CERTIFICATE_VALIDATION)
+                        .getValue());
+        runner.setProperty(SubscribeOpcUa.SERVER_CERTIFICATE_VALIDATION, mode.value());
+        runner.removeProperty(SubscribeOpcUa.PKI);
+        if (mode == ServerCertificateValidation.NONE) runner.assertValid();
+        else runner.assertNotValid();
+        runner.setProperty(SubscribeOpcUa.PKI, "/test-pki");
+        for (org.apache.nifi.components.PropertyDescriptor property :
+                Arrays.asList(
+                        SubscribeOpcUa.CERTIFICATE,
+                        SubscribeOpcUa.PRIVATE_KEY,
+                        SubscribeOpcUa.USERNAME,
+                        SubscribeOpcUa.PASSWORD)) {
+            String old = runner.getProcessContext().getProperty(property).getValue();
+            runner.removeProperty(property);
+            runner.assertNotValid();
+            runner.setProperty(property, old);
+        }
+    }
+
+    @Test
+    void rejectsUnknownValidationModeAndDoesNotMutateSharedChecks() {
+        TestRunner runner = ProcessorTest.configured(new ProcessorTest.OfflineProcessor());
+        runner.setProperty(SubscribeOpcUa.SERVER_CERTIFICATE_VALIDATION, "invalid");
+        runner.assertNotValid();
+        assertThrows(
+                IllegalArgumentException.class, () -> ServerCertificateValidation.parse("invalid"));
+        assertThrows(IllegalArgumentException.class, () -> ServerCertificateValidation.parse(null));
+        Set<org.eclipse.milo.opcua.stack.core.util.validation.ValidationCheck> checks =
+                ServerCertificateValidation.CERTIFICATE.optionalChecks();
+        assertFalse(
+                checks.contains(
+                        org.eclipse.milo.opcua.stack.core.util.validation.ValidationCheck
+                                .HOSTNAME));
+        assertEquals(
+                org.eclipse.milo.opcua.stack.core.util.validation.ValidationCheck
+                                .ALL_OPTIONAL_CHECKS
+                                .size()
+                        - 1,
+                checks.size());
+        checks.clear();
+        assertEquals(
+                org.eclipse.milo.opcua.stack.core.util.validation.ValidationCheck
+                        .ALL_OPTIONAL_CHECKS,
+                ServerCertificateValidation.FULL.optionalChecks());
+        assertTrue(
+                ServerCertificateValidation.FULL
+                        .optionalChecks()
+                        .contains(
+                                org.eclipse.milo.opcua.stack.core.util.validation.ValidationCheck
+                                        .HOSTNAME));
+    }
+
     @Test
     void neverDowngradesWhenTheRequestedEndpointIsAbsent() {
         EndpointDescription none = endpoint("None", "None", token(UserTokenType.UserName, null));

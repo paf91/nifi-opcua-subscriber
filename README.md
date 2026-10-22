@@ -20,7 +20,7 @@ This is an independent community project, not an Apache Software Foundation prod
 | Legacy (default) | 1.23.2 | 8 | 0.6.16 | `mvn clean verify` |
 | Modern | 2.12.0 | 21 | 1.1.8 | `mvn -Pnifi2 clean verify` |
 
-**Version 1.0.1** includes the NiFi 1 operation-limit fix and required independent-server test coverage, alongside the Preview 5 features. See the [changelog](CHANGELOG.md) and [validation record](docs/validation.md). Each release bundle records results for its exact NAR hashes.
+**Version 1.0.2 is in preparation.** It adds configurable server certificate validation, bounds NiFi 2 monitored-item setup waits, stops later batches after cancellation, and preserves patch versions in release archive names. See the [changelog](CHANGELOG.md) and [validation record](docs/validation.md) for completed checks and outstanding release validation. Each release bundle records results for its exact NAR hashes.
 
 Preview 5 passed both Maven suites and standalone real-NiFi smoke tests, including encrypted authentication and username/password without client certificates. Historical Preview 4 binaries also passed a 1,000-tag, 30-minute load phase and legacy two-node failover. Those older load/cluster results do not certify newer binaries. NiFi 2 clustering, multi-day resource testing and representative production-server acceptance remain outstanding.
 
@@ -32,14 +32,14 @@ Requirements: Maven 3.9.11, JDK 8 for the legacy build or JDK 21 for the modern 
 
 ```sh
 mvn -B -ntp clean verify
-python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.1.nar 52
+python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.2.nar 52
 ```
 
 For NiFi 2, use JDK 21:
 
 ```sh
 mvn -B -ntp -Pnifi2 clean verify
-python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.1.nar 65
+python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.2.nar 65
 ```
 
 Always clean when changing profiles. Copy the first artifact elsewhere before building the second; `clean` removes previous output. Dependencies are bundled in the NAR; no separate Milo installation is needed.
@@ -58,7 +58,9 @@ Server time | ns=0;i=2258
 
 These addresses are for the included demo. Use your server's actual addresses. Leave **Application URI** unset to read it from the client certificate, or use the default application identity when no certificate is needed.
 
-For a username/password endpoint without channel security, select **Security Policy = None**, **Security Mode = None**, and **Authentication = Username/Password**. Set Username, Password and Tags; leave client certificate/key unset. PKI is needed only if that endpoint encrypts its username token with a server certificate. See the [configuration combinations](docs/configuration.md#security-and-authentication).
+For a username/password endpoint without channel security, select **Security Policy = None**, **Security Mode = None**, and **Authentication = Username/Password**. Set Username, Password and Tags; leave client certificate/key unset. With Full or Certificate validation, PKI is needed if that endpoint encrypts its username token with a server certificate. See the [configuration combinations](docs/configuration.md#security-and-authentication).
+
+**Server Certificate Validation** defaults to Full. Certificate skips only the endpoint hostname/IP match while retaining trust and Application URI checks; None bypasses server certificate validation and is insecure. See the [validation modes](docs/configuration.md#certificates-and-trust). These modes are independent of channel encryption and client authentication.
 
 Example output:
 

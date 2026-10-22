@@ -44,7 +44,14 @@ class ExternalServerTest {
                         path("OPCUA_TEST_CERTIFICATE", security.requiresClientIdentity()),
                         path("OPCUA_TEST_KEY", security.requiresClientIdentity()),
                         value("OPCUA_TEST_KEY_PASSWORD", ""),
-                        path("OPCUA_TEST_PKI", security.requiresClientIdentity()),
+                        path(
+                                "OPCUA_TEST_PKI",
+                                security.requiresClientIdentity()
+                                        && !"None"
+                                                .equals(
+                                                        value(
+                                                                "OPCUA_TEST_SERVER_VALIDATION",
+                                                                "Full"))),
                         security.usernameAuthentication() ? required("OPCUA_TEST_USERNAME") : null,
                         security.usernameAuthentication() ? required("OPCUA_TEST_PASSWORD") : null,
                         500,
@@ -52,7 +59,9 @@ class ExternalServerTest {
                         Collections.singletonList(
                                 TagDefinition.parse(
                                         "interop", required("OPCUA_TEST_NODE_ID"), 500, 10)),
-                        security);
+                        security,
+                        ServerCertificateValidation.parse(
+                                value("OPCUA_TEST_SERVER_VALIDATION", "Full")));
         for (int attempt = 0; attempt < 2; attempt++) {
             BlockingQueue<DataValue> values = new LinkedBlockingQueue<>();
             try (OpcConnection connection =

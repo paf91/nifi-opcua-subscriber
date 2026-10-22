@@ -64,7 +64,7 @@ jobs:
           NIFI_TARGET: ${{ matrix.nifi }}
           BYTECODE: ${{ matrix.bytecode }}
         run: |
-          NAR="nar/target/nifi-opcua-subscriber-$NIFI_TARGET-1.0.1.nar"
+          NAR="nar/target/nifi-opcua-subscriber-$NIFI_TARGET-1.0.2.nar"
           python3 scripts/verify-interop-tests.py processors/target/surefire-reports
           python3 scripts/verify-nar.py "$NAR" "$BYTECODE"
           python3 scripts/nar-inventory.py "$NAR" --output nar/target/dependency-inventory.json

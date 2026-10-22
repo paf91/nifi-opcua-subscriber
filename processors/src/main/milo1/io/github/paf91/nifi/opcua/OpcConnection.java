@@ -20,7 +20,6 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.*;
 import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
 import org.eclipse.milo.opcua.stack.core.types.structured.RequestHeader;
-import org.eclipse.milo.opcua.stack.core.util.validation.ValidationCheck;
 import org.eclipse.milo.opcua.stack.transport.client.tcp.*;
 
 import java.util.*;
@@ -29,7 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 
 final class OpcConnection implements AutoCloseable {
-    private OpcUaClient client;
+    private BoundedOpcUaClient client;
     private NioEventLoopGroup eventLoop;
     private OpcUaSubscription subscription;
     private FileBasedTrustListManager trust;
@@ -68,6 +67,7 @@ final class OpcConnection implements AutoCloseable {
             throws Exception {
         this.attempt = attempt;
         this.diagnostics = diagnostics;
+        diagnostics.serverCertificateValidation(settings.serverCertificateValidation());
         timeout = settings.requestTimeout();
         try {
             attempt.check();
@@ -85,27 +85,27 @@ final class OpcConnection implements AutoCloseable {
             diagnostics.selected(endpoint);
             diagnostics.stage("Configuring server trust");
             CertificateValidator validator = rejectUnconfiguredTrust();
-            if (settings.security().requiresServerTrust(endpoint)) {
+            if (settings.serverCertificateValidation() == ServerCertificateValidation.NONE) {
+                validator = serverValidator(settings.serverCertificateValidation(), null);
+            } else if (settings.security().requiresServerTrust(endpoint)) {
                 if (settings.pki() == null)
                     throw new IllegalArgumentException(
                             "PKI Directory is required to validate this endpoint's server"
                                     + " certificate, including encrypted username tokens");
                 trust = FileBasedTrustListManager.createAndInitialize(settings.pki());
-                validator =
-                        new DefaultClientCertificateValidator(
-                                trust,
-                                ValidationCheck.ALL_OPTIONAL_CHECKS,
-                                new MemoryCertificateQuarantine());
+                validator = serverValidator(settings.serverCertificateValidation(), trust);
             }
             attempt.check();
             client =
-                    OpcUaClient.create(
+                    new BoundedOpcUaClient(
                             clientConfig(settings, endpoint, endpoints, identity, validator),
-                            transport ->
-                                    transport
+                            new OpcTcpClientTransport(
+                                    OpcTcpClientTransportConfig.newBuilder()
                                             .setEventLoop(eventLoop)
                                             .setConnectTimeout(uint(timeout))
-                                            .setAcknowledgeTimeout(uint(timeout)));
+                                            .setAcknowledgeTimeout(uint(timeout))
+                                            .build()),
+                            attempt);
             final boolean resolveUris = TagResolver.needsNamespaces(settings.tags());
             client.addSessionActivityListener(
                     new org.eclipse.milo.opcua.sdk.client.SessionActivityListener() {
@@ -200,6 +200,7 @@ final class OpcConnection implements AutoCloseable {
             diagnostics.subscription(
                     settings.publishingInterval(),
                     subscription.getRevisedPublishingInterval().orElse(0.0));
+            client.setupComplete();
             diagnostics.stage("Subscribed");
         } catch (Exception e) {
             close();
@@ -231,7 +232,8 @@ final class OpcConnection implements AutoCloseable {
 
     static void synchronizeMonitoredItems(
             OpcUaSubscription subscription, ConnectionAttempt attempt) {
-        // Milo exposes this operation synchronously. Interrupt only this guarded call on Stop.
+        // BoundedOpcUaClient bounds each service call, including lazy operation-limit reads.
+        // Keep interruption scoped so Stop does not contaminate NiFi's reusable worker.
         attempt.blocking(
                 () -> {
                     try {
@@ -326,6 +328,15 @@ final class OpcConnection implements AutoCloseable {
             throw new UaException(
                     StatusCodes.Bad_CertificateUntrusted, "PKI Directory is not configured");
         };
+    }
+
+    static CertificateValidator serverValidator(
+            ServerCertificateValidation validation, TrustListManager trust) {
+        if (validation != ServerCertificateValidation.NONE)
+            return new DefaultClientCertificateValidator(
+                    trust, validation.optionalChecks(), new MemoryCertificateQuarantine());
+        // Explicit opt-in only; Milo still verifies channel/session signatures.
+        return (chain, applicationUri, hosts) -> {};
     }
 
     private void ifActive(Runnable action) {

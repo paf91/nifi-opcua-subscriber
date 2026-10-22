@@ -21,11 +21,11 @@ Use the NARs from one release directory. Each output directory must be new:
 
 ```sh
 python3 scripts/acceptance.py --profile nifi1 \
-  --nar dist/release/nifi1/nifi-opcua-subscriber-1.23.2-1.0.1.nar \
+  --nar dist/release-1.0.2/nifi1/nifi-opcua-subscriber-1.23.2-1.0.2.nar \
   --output dist/acceptance/legacy --subnet 172.30.248.0/24 --tags 1000 --seconds 1800
 
 python3 scripts/acceptance.py --profile nifi2 \
-  --nar dist/release/nifi2/nifi-opcua-subscriber-2.12.0-1.0.1.nar \
+  --nar dist/release-1.0.2/nifi2/nifi-opcua-subscriber-2.12.0-1.0.2.nar \
   --output dist/acceptance/modern --subnet 172.30.249.0/24 --tags 1000 --seconds 1800
 ```
 

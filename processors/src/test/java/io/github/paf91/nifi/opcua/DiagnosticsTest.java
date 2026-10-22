@@ -21,6 +21,31 @@ import java.util.function.Consumer;
 class DiagnosticsTest {
     private static final ObjectMapper JSON = new ObjectMapper();
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(ServerCertificateValidation.class)
+    void verificationUsesTheConfiguredServerValidation(ServerCertificateValidation mode) {
+        AtomicReference<OpcSettings> captured = new AtomicReference<>();
+        SubscribeOpcUa processor =
+                new SubscribeOpcUa() {
+                    @Override
+                    protected AutoCloseable verifyConnection(
+                            OpcSettings settings,
+                            ConnectionAttempt attempt,
+                            ConnectionDiagnostics report) {
+                        captured.set(settings);
+                        report.serverCertificateValidation(settings.serverCertificateValidation());
+                        return () -> {};
+                    }
+                };
+        TestRunner runner = ProcessorTest.configured(processor);
+        runner.setProperty(SubscribeOpcUa.SERVER_CERTIFICATE_VALIDATION, mode.value());
+        ConfigVerificationResult result =
+                processor.verify(runner.getProcessContext(), null, Collections.emptyMap()).get(0);
+        assertEquals(ConfigVerificationResult.Outcome.SUCCESSFUL, result.getOutcome());
+        assertEquals(mode, captured.get().serverCertificateValidation());
+        assertTrue(result.getExplanation().contains("serverCertificateValidation=" + mode.value()));
+    }
+
     @Test
     void quietSubscriptionKeepAliveDoesNotPretendToBeAFreshValue() {
         ConnectionDiagnostics report = new ConnectionDiagnostics();

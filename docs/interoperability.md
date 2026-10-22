@@ -8,6 +8,8 @@ An independent implementation can reveal assumptions hidden when the client and 
 
 Run `mvn -Pnifi1 clean verify` on JDK 8 and `mvn -Pnifi2 clean verify` on JDK 21. `SecureSubscriptionTest` uses local temporary Milo servers and covers all 22 valid combinations of the six policies, three modes and two authentication types. It also tests a None channel with encrypted username tokens and trusted, missing or untrusted PKI, and rejects an incorrect password without channel encryption. These tests require permission to bind loopback ports. The normal CI build includes them.
 
+`ServerCertificateValidationTest` runs the Full/Certificate/None matrix against generated server identities on secured channels and on None channels with encrypted username tokens. It covers hostname and URI mismatches, expiry, usage/signature failures, missing/untrusted/unusable PKI, and continued rejection of bad credentials/client identities. `ServerCertificateChecksTest` exercises real certificate validation without network sockets, including CA-signed chains with valid, missing and revoked CRLs. Both are part of each profile's normal build.
+
 Socket-free tests check all 36 combinations, reject incompatible policy/mode pairs, validate real username-token encryption and server trust, preserve buffered security attributes, load PEM/DER keys, and decode binary OPC UA matrices into JSON.
 
 ## Built-in open62541 fixture
@@ -44,6 +46,8 @@ mvn -Pnifi1 -pl processors -Dtest=ExternalServerTest test
 Use the server's actual NodeId if it does not expose that standard server-time node. To test username/password, set `OPCUA_TEST_AUTH='Username/Password'` and provide `OPCUA_TEST_USERNAME` and `OPCUA_TEST_PASSWORD` through the environment. Keep passwords out of Maven command-line arguments. Set `OPCUA_TEST_PKI` when the username token is encrypted, even with a None channel.
 
 For secured channels, set `OPCUA_TEST_POLICY` and `OPCUA_TEST_MODE` to the advertised settings, then set absolute paths in `OPCUA_TEST_CERTIFICATE`, `OPCUA_TEST_KEY` and `OPCUA_TEST_PKI`. Optional variables are `OPCUA_TEST_KEY_PASSWORD` and `OPCUA_TEST_APPLICATION_URI`. Trust must be configured at both ends. See the [certificate requirements](configuration.md#certificates-and-trust).
+
+`OPCUA_TEST_SERVER_VALIDATION` defaults to `Full`; set it to `Certificate` to test a known hostname/IP mismatch, or `None` for an explicit insecure test. None makes the test's PKI directory optional; it still requires client identity files on secured channels. Use an authorized test endpoint and test credentials.
 
 Repeat on JDK 21 with `-Pnifi2`; clean the build when switching profiles. The external test creates a subscription, requires a Good initial notification, closes it, and reconnects for a second subscription. It is skipped unless `OPCUA_TEST_ENDPOINT` is set. It does not start or reconfigure the external server.
 

@@ -40,6 +40,10 @@ final class ConnectionDiagnostics {
         stage = value;
     }
 
+    synchronized void serverCertificateValidation(ServerCertificateValidation validation) {
+        metadata.put("serverCertificateValidation", validation.value());
+    }
+
     synchronized boolean sessionActive(NodeId id) {
         sessionActive = true;
         sessionActivations++;

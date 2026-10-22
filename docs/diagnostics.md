@@ -1,6 +1,6 @@
 # Connection diagnostics and health reports
 
-NiFi **Verify** uses the configured endpoint, security/authentication and tag list to open a temporary session, resolve namespaces and create every monitored item. It then closes the connection. Results show the failure stage and cause, advertised endpoints/token policies, selected endpoint, certificate expiry/SHA-256, namespace mapping and requested/revised publishing, sampling and queue settings. Verification uses normal trust validation and never automatically trusts a discovered certificate.
+NiFi **Verify** uses the configured endpoint, security/authentication and tag list to open a temporary session, resolve namespaces and create every monitored item. It then closes the connection. Results show the failure stage and cause, advertised endpoints/token policies, selected endpoint, certificate expiry/SHA-256, namespace mapping and requested/revised publishing, sampling and queue settings. Verification uses the selected **Server Certificate Validation** mode and reports it as `serverCertificateValidation`. Success with None does not establish the server's identity; Certificate omits hostname/IP matching. No mode automatically adds a discovered certificate to the trust list.
 
 Verification can consume an extra server session and subscription, even if the processor is running. It does not emit measurements, alter the running connection, or drain its buffer. Success confirms connection and monitored-item creation, not that every sensor currently has Good quality; some servers report read/access problems through subsequent data-change status codes. Inspect actual records as well.
 
@@ -23,6 +23,7 @@ Counters last for the processor instance and survive same-JVM Stop/Start; recrea
 
 The connection section distinguishes:
 
+- `serverCertificateValidation`: configured Full, Certificate or None for this attempt; it does not imply a certificate was used on an unsecured endpoint.
 - `sessionActive`: Milo's session activity, not a fresh round-trip probe.
 - `lastKeepAliveReceivedAt`: a subscription keep-alive received locally; quiet subscriptions can still be healthy.
 - `lastNotificationReceivedAt`: any data-change callback, including Bad/Uncertain or locally dropped records.
@@ -36,4 +37,4 @@ Reports are emitted only on a connected primary's NiFi trigger. Stopped processo
 
 Metadata is bounded to 50 advertised endpoints, 20 identity-token policies per endpoint, 128 namespace entries and 100 monitored-item details. Counts expose larger collections; `itemDetailsTruncated` marks truncated item detail. Strings are capped at 512 characters, and connection failure text at 4096 characters. Reports contain no sensor values, passwords, or private keys. Configured passwords are redacted before string truncation. Endpoint user information, query strings and fragments are removed. Tags, namespace URIs, endpoint paths and certificate identities remain operational metadata: route reports to an appropriate internal destination.
 
-Certificate details from discovery may describe an untrusted server if connection setup fails. A displayed fingerprint is diagnostic information, not an instruction to trust that certificate. Negotiated settings describe what the server accepted, not a guarantee that source acquisition follows that exact frequency.
+Certificate details from discovery may describe an untrusted server if connection setup fails or validation is None. A displayed fingerprint is diagnostic information, not an instruction to trust that certificate. Negotiated settings describe what the server accepted, not a guarantee that source acquisition follows that exact frequency.

@@ -4,7 +4,7 @@
 
 Scheduling prepares state without opening a session. A connected primary node opens the subscription from its trigger. Therefore a full outbound queue can delay initial connection and recovery. Observe successful data and bulletins, not only the NiFi RUNNING indicator.
 
-Stop cancels startup, fences old callbacks, closes owned transports and trust-store watchers, and retains pending records in memory. Start drains them before opening a new subscription. Request Timeout bounds each OPC operation; it is not a deadline for the entire startup of a large tag list. NiFi/JVM restart loses the memory queue.
+Stop cancels startup, fences old callbacks, closes owned transports and trust-store watchers, and retains pending records in memory. Start drains them before opening a new subscription. During initial setup, Request Timeout bounds each OPC operation, including session acquisition for NiFi 2 operation-limit reads and monitored-item creation. Each batch gets a fresh deadline; the setting is not a deadline for the entire startup of a large tag list. Milo manages established-session recovery separately. NiFi/JVM restart loses the memory queue.
 
 A server restart may preserve/transfer a session or require a new subscription. Failed transfer, bad status and watchdog events request recovery. The server can repeat current values when a subscription is recreated.
 
