@@ -343,7 +343,7 @@ class Open62541Test {
     }
 
     @Test
-    void closingFencesAnInProgressCallbackAndItsDiagnostics() throws Exception {
+    void closingDoesNotWaitForAConsumerAndFencesFurtherDiagnostics() throws Exception {
         start(false, "None");
         CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
         ConnectionDiagnostics report = new ConnectionDiagnostics();
@@ -355,7 +355,7 @@ class Open62541Test {
                             if (((Number) value.getValue().getValue()).doubleValue() == 99) {
                                 entered.countDown();
                                 try {
-                                    assertTrue(release.await(5, TimeUnit.SECONDS));
+                                    assertTrue(release.await(10, TimeUnit.SECONDS));
                                 } catch (InterruptedException e) {
                                     Thread.currentThread().interrupt();
                                 }
@@ -376,11 +376,12 @@ class Open62541Test {
                                 connection.close();
                             });
             assertTrue(closing.await(1, TimeUnit.SECONDS));
-            assertThrows(TimeoutException.class, () -> closed.get(100, TimeUnit.MILLISECONDS));
-            release.countDown();
+            // Encoding may still be running. Closing must finish without waiting for it;
+            // the processor independently fences final queue admission after encoding.
             closed.get(3, TimeUnit.SECONDS);
             assertEquals(false, report.snapshot().get("sessionActive"));
             long received = (Long) report.snapshot().get("notificationsReceived");
+            release.countDown();
             write(100, 0);
             Thread.sleep(300);
             assertEquals(received, report.snapshot().get("notificationsReceived"));

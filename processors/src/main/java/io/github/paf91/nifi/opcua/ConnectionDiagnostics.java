@@ -29,9 +29,9 @@ final class ConnectionDiagnostics {
     private boolean sessionActive;
     private int sessionActivations;
     private int itemCount;
-    private String lastKeepAlive;
-    private String lastNotification;
-    private String lastGoodValue;
+    private Instant lastKeepAlive;
+    private Instant lastNotification;
+    private Instant lastGoodValue;
     private long notifications;
     private NodeId firstSession;
     private boolean settingsMayBeStale;
@@ -61,12 +61,12 @@ final class ConnectionDiagnostics {
     }
 
     synchronized void keepAlive() {
-        lastKeepAlive = Instant.now().toString();
+        lastKeepAlive = Instant.now();
     }
 
     synchronized void notification(DataValue value) {
         notifications++;
-        lastNotification = Instant.now().toString();
+        lastNotification = Instant.now();
         if (value.getStatusCode() != null && value.getStatusCode().isGood())
             lastGoodValue = lastNotification;
     }
@@ -161,14 +161,18 @@ final class ConnectionDiagnostics {
         result.put("sessionActive", sessionActive);
         result.put("sessionActivations", sessionActivations);
         result.put("settingsMayBeStale", settingsMayBeStale);
-        result.put("lastKeepAliveReceivedAt", lastKeepAlive);
-        result.put("lastNotificationReceivedAt", lastNotification);
-        result.put("lastGoodValueReceivedAt", lastGoodValue);
+        result.put("lastKeepAliveReceivedAt", timestamp(lastKeepAlive));
+        result.put("lastNotificationReceivedAt", timestamp(lastNotification));
+        result.put("lastGoodValueReceivedAt", timestamp(lastGoodValue));
         result.put("notificationsReceived", notifications);
         result.put("monitoredItemCount", itemCount);
         result.put("monitoredItems", new ArrayList<>(items));
         result.put("itemDetailsTruncated", itemCount > items.size());
         return result;
+    }
+
+    private static String timestamp(Instant value) {
+        return value == null ? null : value.toString();
     }
 
     String clean(String value) {

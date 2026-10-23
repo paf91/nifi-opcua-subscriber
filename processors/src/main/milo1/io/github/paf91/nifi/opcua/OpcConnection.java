@@ -187,11 +187,10 @@ final class OpcConnection implements AutoCloseable {
                 if (tag.filter() != null) item.setFilter(tag.filter());
                 item.setDataValueListener(
                         (ignored, value) -> {
-                            ifActive(
-                                    () -> {
-                                        diagnostics.notification(value);
-                                        consumer.accept(tag, value);
-                                    });
+                            ifActive(() -> diagnostics.notification(value));
+                            // The consumer fences final queue admission; encoding must not hold
+                            // the monitor used to cancel a connection.
+                            if (active && !attempt.isCancelled()) consumer.accept(tag, value);
                         });
                 subscription.addMonitoredItem(item);
             }

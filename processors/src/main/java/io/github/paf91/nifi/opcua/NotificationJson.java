@@ -14,48 +14,64 @@ import java.util.*;
 
 final class NotificationJson {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final char[] HEX = "0123456789ABCDEF".toCharArray();
+    static final int MAX_VALUE_DEPTH = 128;
 
     static byte[] encode(TagDefinition tag, DataValue value) throws java.io.IOException {
         return encode(tag, value, Integer.MAX_VALUE);
     }
 
     static byte[] encode(TagDefinition tag, DataValue value, int maximumBytes) throws IOException {
-        Map<String, Object> record = new LinkedHashMap<>();
-        record.put("tag", tag.alias());
-        record.put("nodeId", tag.nodeId().toParseableString());
-        if (tag.address().namespaceUri() != null) {
-            record.put("configuredNodeId", tag.address().text());
-            record.put("namespaceUri", tag.address().namespaceUri());
-        }
+        String received = Instant.now().toString();
         Object raw = value.getValue() == null ? null : value.getValue().getValue();
-        record.put("value", raw);
-        record.put("valueType", raw == null ? null : raw.getClass().getSimpleName());
         StatusCode status = value.getStatusCode();
-        record.put(
-                "statusCode", status == null ? null : String.format("0x%08X", status.getValue()));
-        record.put(
-                "quality",
-                status == null
-                        ? "Unknown"
-                        : status.isGood() ? "Good" : status.isBad() ? "Bad" : "Uncertain");
-        record.put("sourceTimestamp", timestamp(value.getSourceTime()));
-        record.put("receivedTimestamp", Instant.now().toString());
         LimitedOutput output = new LimitedOutput(maximumBytes);
         try (JsonGenerator generator = JSON.getFactory().createGenerator(output)) {
             generator.writeStartObject();
-            for (Map.Entry<String, Object> field : record.entrySet()) {
-                generator.writeFieldName(field.getKey());
-                if (field.getKey().equals("value")) writeValue(generator, field.getValue());
-                else generator.writeObject(field.getValue());
+            generator.writeStringField("tag", tag.alias());
+            generator.writeStringField("nodeId", nodeIdText(tag.nodeId(), maximumBytes));
+            if (tag.address().namespaceUri() != null) {
+                generator.writeStringField("configuredNodeId", tag.address().text());
+                generator.writeStringField("namespaceUri", tag.address().namespaceUri());
             }
+            generator.writeFieldName("value");
+            writeValue(generator, raw);
+            generator.writeStringField(
+                    "valueType", raw == null ? null : raw.getClass().getSimpleName());
+            generator.writeStringField(
+                    "statusCode", status == null ? null : statusText(status.getValue()));
+            generator.writeStringField(
+                    "quality",
+                    status == null
+                            ? "Unknown"
+                            : status.isGood() ? "Good" : status.isBad() ? "Bad" : "Uncertain");
+            generator.writeStringField("sourceTimestamp", timestamp(value.getSourceTime()));
+            generator.writeStringField("receivedTimestamp", received);
             generator.writeEndObject();
         }
         return output.bytes.toByteArray();
     }
 
+    private static String statusText(long value) {
+        // OPC UA status codes are UInt32; retain the old representation for unusual SDK values.
+        if ((value & 0xffffffff00000000L) != 0)
+            return "0x" + Long.toHexString(value).toUpperCase(Locale.ROOT);
+        char[] text = new char[10];
+        text[0] = '0';
+        text[1] = 'x';
+        for (int i = 9; i >= 2; i--, value >>>= 4) text[i] = HEX[(int) (value & 15)];
+        return new String(text);
+    }
+
     private static void writeValue(JsonGenerator generator, Object value) throws IOException {
-        value = OpcValue.nestedArray(value);
-        if (value instanceof Variant) writeValue(generator, ((Variant) value).getValue());
+        writeValue(generator, value, 0);
+    }
+
+    static void writeValue(JsonGenerator generator, Object value, int depth) throws IOException {
+        if (depth > MAX_VALUE_DEPTH) throw new IOException("OPC UA value nesting is too deep");
+        if (OpcValue.writeMatrix(generator, value, depth)) return;
+        if (value instanceof Variant)
+            writeValue(generator, ((Variant) value).getValue(), depth + 1);
         else if (value instanceof ByteString) {
             ByteString binary = (ByteString) value;
             if (binary.isNull()) generator.writeNull();
@@ -63,9 +79,42 @@ final class NotificationJson {
         } else if (value != null && value.getClass().isArray()) {
             generator.writeStartArray();
             for (int i = 0; i < Array.getLength(value); i++)
-                writeValue(generator, Array.get(value, i));
+                writeValue(generator, Array.get(value, i), depth + 1);
             generator.writeEndArray();
+        } else if (value instanceof ExtensionObject) {
+            ExtensionObject extension = (ExtensionObject) value;
+            Object body = extension.getBody();
+            generator.writeStartObject();
+            generator.writeStringField(
+                    "encoding",
+                    body instanceof ByteString
+                            ? "opcua-binary"
+                            : body instanceof XmlElement ? "opcua-xml" : "opcua-json");
+            generator.writeStringField(
+                    OpcValue.jsonEncoded(extension) ? "typeId" : "encodingId",
+                    nodeIdText(
+                            OpcValue.encodingId(extension),
+                            ((LimitedOutput) generator.getOutputTarget()).limit));
+            generator.writeFieldName("body");
+            // Preserve opaque bodies without decoding them or materializing a display string.
+            writeValue(generator, body, depth + 1);
+            generator.writeEndObject();
+        } else if (value instanceof XmlElement) {
+            generator.writeString(((XmlElement) value).getFragment());
+        } else if (value instanceof NodeId) {
+            generator.writeString(
+                    nodeIdText(
+                            (NodeId) value, ((LimitedOutput) generator.getOutputTarget()).limit));
         } else generator.writeObject(normalize(value));
+    }
+
+    private static String nodeIdText(NodeId value, int limit) throws RecordTooLargeException {
+        Object identifier = value.getIdentifier();
+        if ((identifier instanceof String && ((String) identifier).length() > limit)
+                || (identifier instanceof ByteString
+                        && ((ByteString) identifier).length() > limit * 3L / 4))
+            throw new RecordTooLargeException();
+        return value.toParseableString();
     }
 
     static final class RecordTooLargeException extends IOException {
@@ -100,7 +149,6 @@ final class NotificationJson {
     }
 
     static Object normalize(Object value) {
-        value = OpcValue.nestedArray(value);
         if (value == null) return null;
         if (value instanceof ULong)
             return value.toString(); // exact beyond JSON/JavaScript integer precision
@@ -109,8 +157,13 @@ final class NotificationJson {
         if (value instanceof Long) return value.toString();
         if (value instanceof Double && !Double.isFinite((Double) value)) return value.toString();
         if (value instanceof Float && !Float.isFinite((Float) value)) return value.toString();
-        if (value instanceof String || value instanceof Boolean || value instanceof Number)
-            return value;
+        if (value instanceof String
+                || value instanceof Boolean
+                || value instanceof Byte
+                || value instanceof Short
+                || value instanceof Integer
+                || value instanceof Float
+                || value instanceof Double) return value;
         if (value instanceof ByteString) {
             ByteString bytes = (ByteString) value;
             return bytes.isNull() ? null : Base64.getEncoder().encodeToString(bytes.bytes());
@@ -131,11 +184,12 @@ final class NotificationJson {
                 values.add(normalize(Array.get(value, i)));
             return values;
         }
-        // Do not silently stringify proprietary structures and pretend their type was preserved.
+        // Unknown implementations can allocate arbitrarily in toString(). Do not invoke them.
         Map<String, Object> fallback = new LinkedHashMap<>();
-        fallback.put("encoding", "display");
+        boolean boundedDisplay = value instanceof UUID || value instanceof StatusCode;
+        fallback.put("encoding", boundedDisplay ? "display" : "unsupported");
         fallback.put("type", value.getClass().getName());
-        fallback.put("text", value.toString());
+        if (boundedDisplay) fallback.put("text", value.toString());
         return fallback;
     }
 }

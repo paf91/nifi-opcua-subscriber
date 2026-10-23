@@ -189,3 +189,9 @@ Configure a server-side filter per numeric tag using JSON:
 `Maximum Record Bytes` must fit `Notification Buffer Bytes`, and must be at most `Maximum FlowFile Bytes` minus two array-bracket bytes. A batch also accounts for commas. Oversized values are rejected during JSON serialization and counted separately in diagnostics. Full count or byte capacity drops the newest notification. Stop/Start retains the old buffer's byte and record limits until it drains, so reducing limits cannot strand previously accepted records. These limits bound serialized records, not the full JVM, decoded Milo values, transport buffers or temporary encoding allocations.
 
 Use NiFi **Verify** to test discovery, trust/authentication, namespace resolution and creation of all configured monitored items. Verification briefly creates a real session and subscription, then closes them; it emits no measurement FlowFiles and does not drain or replace the running processor's buffer. It can consume an additional server session while the processor is running. See [diagnostics](diagnostics.md) for optional health reports and their interpretation.
+
+## Stop draining
+
+**Stop Drain Timeout (ms)** defaults to **5000**, with a range of **0–30000**. After the subscription closes and active triggers finish, the processor tries to commit buffered records within this additional time. Zero disables the attempt. Downstream backpressure, loss of primary ownership, interruption or a repository failure ends draining early. Remaining records produce a warning and stay in memory for Start.
+
+A pending commit keeps its reservation until NiFi reports success or failure; a timeout does not make it safe to retry the same batch. The setting bounds the extra drain wait, not an already-active trigger, blocked repository I/O, or total NiFi shutdown time. See [operations](operations.md) for the lifecycle details.

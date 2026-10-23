@@ -9,16 +9,16 @@ python3 scripts/check-project.py
 python3 -m unittest discover -s tests -v
 
 mvn -B -ntp clean verify
-python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.2.nar 52
-python3 scripts/nar-inventory.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.2.nar --output nar/target/dependency-inventory.json
+python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.4.nar 52
+python3 scripts/nar-inventory.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.4.nar --output nar/target/dependency-inventory.json
 ```
 
 Save the legacy NAR/reports outside target, switch to JDK 21, then:
 
 ```sh
 mvn -B -ntp -Pnifi2 -Dnifi.version=2.12.0 clean verify
-python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.2.nar 65
-python3 scripts/nar-inventory.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.2.nar --output nar/target/dependency-inventory.json
+python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.4.nar 65
+python3 scripts/nar-inventory.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.4.nar --output nar/target/dependency-inventory.json
 python3 scripts/format-java.py --check
 ```
 
@@ -32,7 +32,7 @@ Integration tests cover the 22 supported policy/mode/authentication combinations
 
 GitHub Actions runs repository checks and both builds on pull requests and pushes. It uses read-only permissions, pinned official actions, Maven 3.9.11 Docker images and separate artifacts for each profile. Maven runs with full exception output, and its console logs are saved under `dist/ci-logs/` and uploaded even if dependency resolution fails before tests start. Test reports are also uploaded when available; a downloadable artifact does not itself imply the job passed. CI does not publish a release or deploy a flow.
 
-The GitLab pipeline builds the same checksum-pinned open62541 fixture in a separate Ubuntu job and supplies it to both Maven jobs. Both CI providers check the JUnit reports and fail if an independent-server suite is missing or skipped. GitLab requires a compatible runner to be assigned. Local successful tests do not imply that a remote CI run has executed.
+The GitLab pipeline builds the same checksum-pinned open62541 fixture in a separate Ubuntu job and supplies it to both Maven jobs. Both CI providers check the JUnit reports and fail if an independent-server suite is missing or skipped. GitLab also runs repository checks, Python tests, Java formatting, dependency inventories/advisory checks and the Java 8 demo build, matching those GitHub checks before publication. Keep the successful GitLab pipeline link with the release evidence; local successful tests do not imply that remote CI ran.
 
 ## Artifact verification
 
@@ -80,12 +80,12 @@ The intended GitHub repository is `paf91/nifi-opcua-subscriber`. Publication rem
 After committing the intended source, run:
 
 ```sh
-python3 scripts/release.py --output dist/release-1.0.2 --maven-cache ~/.m2
+python3 scripts/release.py --output dist/release-1.0.4 --maven-cache ~/.m2
 ```
 
 The output directory must not exist. This builds from a clean Git archive in a temporary directory, not from existing Maven target directories. It builds the pinned open62541 fixture, requires its integration and recovery suites in both profiles, verifies NAR packaging and formatting, builds the demo, queries OSV, and creates a bundle containing source, binaries, test reports, independent-server logs, dependency inventories, commit/image metadata and SHA-256 checksums. Both builds use the same commit-derived archive timestamp by default. For a reproducibility check, pass `--output-timestamp` with the previous bundle’s `outputTimestamp` and compare NAR hashes; source and tool changes can still change the result. This improves artifact traceability; bit-for-bit reproducibility across arbitrary toolchains is not claimed.
 
-The archive and its checksum retain the full output name: `dist/release-1.0.2.tar.gz` and `dist/release-1.0.2.tar.gz.sha256`. Existing archives or checksum files are rejected before building and are never overwritten. Failed output retains an `INCOMPLETE` marker, including packaging failures, and must not be distributed. The script never pushes, publishes or deploys. Runtime acceptance is separate: run [the acceptance harness](acceptance.md) against the resulting NARs and retain its hash-linked reports. Do not label a new binary runtime-tested merely because an earlier binary passed.
+The archive and its checksum retain the full output name: `dist/release-1.0.4.tar.gz` and `dist/release-1.0.4.tar.gz.sha256`. Existing archives or checksum files are rejected before building and are never overwritten. Failed output retains an `INCOMPLETE` marker, including packaging failures, and must not be distributed. The script never pushes, publishes or deploys. Runtime acceptance is separate: run [the acceptance harness](acceptance.md) against the resulting NARs and retain its hash-linked reports. Do not label a new binary runtime-tested merely because an earlier binary passed.
 
 The CI workflow also checks bundled dependency advisories on pushes, pull requests, manual runs and a weekly schedule. An API failure fails the check; review the uploaded report rather than treating unavailable advisory data as a pass.
 

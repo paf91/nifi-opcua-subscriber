@@ -21,6 +21,7 @@ final class ConnectionAttempt {
         if (cancelled) throw new CancellationException("OPC UA connection attempt cancelled");
     }
 
+    /** Fence short state changes only; never encode values or perform blocking I/O here. */
     synchronized void ifActive(Runnable action) {
         if (!cancelled) action.run();
     }

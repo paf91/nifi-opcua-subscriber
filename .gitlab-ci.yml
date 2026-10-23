@@ -4,6 +4,17 @@ variables:
 cache:
   key: "maven-$CI_JOB_NAME"
   paths: [.m2/repository/]
+repository:
+  stage: test
+  needs: []
+  image: maven:3.9.11-eclipse-temurin-21
+  cache: []
+  script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends python3 git
+    - python3 scripts/check-project.py
+    - python3 -m unittest discover -s tests -v
+    - python3 scripts/format-java.py --check
 open62541:
   stage: fixture
   image: ubuntu:22.04
@@ -30,6 +41,9 @@ open62541:
       - nar/target/*.nar
       - processors/target/surefire-reports/
       - processors/target/interop-logs/
+      - nar/target/dependency-inventory.json
+      - nar/target/advisory-report.json
+      - demo/target/*.jar
     reports:
       junit: processors/target/surefire-reports/TEST-*.xml
     expire_in: 30 days
@@ -39,11 +53,16 @@ nifi1-java8:
   script:
     - mvn -e -B -ntp -Pnifi1 clean verify
     - python3 scripts/verify-interop-tests.py processors/target/surefire-reports
-    - python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.2.nar 52
+    - python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.4.nar 52
+    - python3 scripts/nar-inventory.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.4.nar --output nar/target/dependency-inventory.json
+    - python3 scripts/check-advisories.py nar/target/dependency-inventory.json --output nar/target/advisory-report.json
+    - mvn -e -B -ntp -f demo/pom.xml clean package
 nifi2-java21:
   extends: .build
   image: maven:3.9.11-eclipse-temurin-21
   script:
     - mvn -e -B -ntp -Pnifi2 -Dnifi.version=2.12.0 clean verify
     - python3 scripts/verify-interop-tests.py processors/target/surefire-reports
-    - python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.2.nar 65
+    - python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.4.nar 65
+    - python3 scripts/nar-inventory.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.4.nar --output nar/target/dependency-inventory.json
+    - python3 scripts/check-advisories.py nar/target/dependency-inventory.json --output nar/target/advisory-report.json

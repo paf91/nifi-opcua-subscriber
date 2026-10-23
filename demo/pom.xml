@@ -2,7 +2,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.github.paf91.nifi</groupId>
   <artifactId>nifi-opcua-subscriber-demo-server</artifactId>
-  <version>1.0.2</version>
+  <version>1.0.4</version>
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.release>8</maven.compiler.release>

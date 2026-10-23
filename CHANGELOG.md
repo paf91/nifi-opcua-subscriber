@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.4 — Bounded stop draining and lower callback allocation (2026-10-22)
+
+- Close ingress first, then attempt to drain buffered notifications on Stop. Add `Stop Drain Timeout (ms)`, default 5000 and configurable from 0 to 30000; zero disables the attempt. Warn only when records remain after draining is unavailable, fails or reaches its deadline.
+- Respect batch limits, downstream backpressure and primary ownership during draining. Preserve old source metadata and in-flight reservations across timeouts and Stop/Start. At most one stop-drain worker exists per processor; a blocked repository operation cannot hold the lifecycle wait or accumulate workers across repeated stops.
+- Write fixed notification fields directly and format UInt32 status codes without a per-notification map or general formatter. Format diagnostic timestamps only for snapshots. Preserve the 1.0.3 JSON schema and encoded-body migration.
+- Add regressions for successful drains, write/commit failures, stalled writes/rollbacks, interruption, backpressure, role changes, byte bounds, late commit outcomes and repeated Stop/Start; verify allocation savings and encoding compatibility on Java 8 and 21.
+- Add repository/tooling tests, formatting, dependency advisory checks and the demo build to GitLab CI so the runner covers those GitHub checks before publication.
+
+The drain deadline bounds the processor's additional stop-time wait. NiFi may still wait for an already-active trigger blocked in its repository. Delivery remains in memory and does not recover history or survive a JVM failure before commit.
+
+## 1.0.3 — Bounded encoding and responsive cancellation (2026-10-22)
+
+- Stream opaque ExtensionObject binary/XML/JSON bodies and NiFi 2 matrices through the record byte limit, without constructing full display strings or nested Java arrays. Reject invalid or excessive matrix dimensions.
+- Reject new notifications before encoding when local capacity is exhausted, and bound encoding by the remaining byte capacity. Final admission still enforces count and byte limits atomically.
+- Keep encoding outside the cancellation monitor; fence the final enqueue so callbacks that finish after Stop or primary revocation cannot add values.
+- Separate transport ownership from repository I/O. Stop and primary revocation can close a connection while a content write is blocked; connections completing after cancellation are closed without publication. Pending commit and Stop/Start retention semantics remain unchanged.
+- Add allocation, malformed/empty matrix, late-callback, blocked-storage, connection-race and repeated-resource-cleanup regressions for Java 8 and Java 21.
+- **Output migration:** ExtensionObject values now contain `encoding`, an `encodingId` (binary/XML) or `typeId` (JSON), and `body`; binary bodies are Base64. Unsupported objects use `encoding: unsupported` and their Java `type`, with no arbitrary display text. Fixed-size UUID/StatusCode display values retain their existing form. See [output](docs/output.md).
+- Version both NARs, the demo and CI artifact paths as `1.0.3`. Validation and runtime acceptance evidence are recorded against the exact release artifacts.
+
 ## 1.0.2 — Certificate validation and setup fixes (in preparation)
 
 - Add Server Certificate Validation modes Full (default), Certificate (skip hostname/IP only) and None (insecure), for both NiFi adapters and encrypted username tokens. Existing flows retain full validation; None does not require a PKI directory.
@@ -72,4 +92,4 @@ Existing demo flows are not overwritten by the seeder. After rebuilding the demo
 
 - Separate legacy and modern NARs, secured subscriptions, JSON output and local NiFi demo.
 
-Preview entries describe historical development milestones built as `1.0.0-SNAPSHOT`. The current Maven version is `1.0.2`; validation limits remain documented per release.
+Preview entries describe historical development milestones built as `1.0.0-SNAPSHOT`. The current Maven version is `1.0.3`; validation limits remain documented per release.

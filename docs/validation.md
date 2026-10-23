@@ -1,5 +1,23 @@
 # Validation record
 
+## Version 1.0.4 — Stop draining and callback cost
+
+The stop review confirmed that 1.0.3 retained the last buffered notification without attempting a final drain. The new stop path is tested for successful multi-batch draining, original source metadata and FlowFile byte limits; synchronous and asynchronous repository failures; unresolved and late commits; blocked writes, rollback and commit calls; interruption; downstream backpressure; loss of primary ownership; and repeated Stop/Start with one blocked worker. These tests use controlled NiFi mock sessions to exercise failures that are difficult to reproduce safely in a running repository. Full-runtime evidence is recorded separately by NAR hash.
+
+Before/after probes use the same small Double notification with an Uncertain status, 20,000 warm-up iterations and 50,000 measured encodings on actual Temurin Java 8 and 21. The 1.0.3 reference allocated approximately 3.5–4.6 KiB per scalar encoding; the revised encoder used approximately 1.9–2.3 KiB. Diagnostic callbacks dropped from approximately 535–880 bytes per notification to 24–36 bytes by deferring timestamp formatting to snapshots. CPU time is recorded in the probe output but is not a stable CI threshold. These are controlled per-thread cumulative-allocation measurements, not production throughput or total retained-heap estimates. Regressions check the existing field order, status/quality encoding and timestamp representation.
+
+The GitLab runner now performs repository/tooling tests, formatting, dependency advisory checks and the Java 8 demo build in addition to both complete processor builds and independent open62541 suites. Release evidence must include the successful pipeline, exact source commit, artifact hashes and current runtime results. A stop-drain deadline does not forcibly terminate uninterruptible repository I/O or make buffered delivery durable.
+
+## Version 1.0.3 — Memory bounds and cancellation
+
+The memory review was repeated against the updated GitLab source before applying fixes. It reproduced eager ExtensionObject display conversion, eager NiFi 2 matrix expansion, serialization after buffer saturation, and cancellation waiting for callbacks or repository writes. The reference and GitLab trees were identical despite different commit histories.
+
+The corrected allocation probes ran on actual Temurin Java 8 and Java 21. A 1.5 MiB binary ExtensionObject exceeded a 1 KiB record limit with approximately 8 KiB of temporary allocation; 200 discarded 512 KiB values in a full buffer allocated approximately 3–4 KiB in total. The modern one-million-element matrix probe allocated under 100 KiB before rejection. These are per-thread cumulative allocation measurements in controlled tests, not production throughput or retained-heap measurements.
+
+Committed regressions cover binary/XML/JSON and null structured bodies, bounded unknown-value handling, matrix shapes/dimensions, partial/full byte capacity, small-heap encoding, cancellation during encoding, blocked repository writes, late connection completion, and live callback fencing. Repeated secure connections and silent handshakes check owned threads, file descriptors and collectability while a second client remains active. Existing delivery and commit tests continue to cover retained records and pending commits.
+
+The release bundle records the complete Java 8/21 build results, independent-server coverage, dependency checks and NAR hashes. Runtime acceptance reports must identify those same hashes. Earlier 1.0.1/1.0.2 runtime results do not validate 1.0.3, and passing bounded tests does not establish multi-day leak freedom or behavior against the production server. See the release evidence for completed runtime coverage.
+
 Historical Preview 4 publication preparation checked on 2026-10-19 (Europe/Amsterdam).
 These are local results, not a GitHub Actions run or production certification.
 
@@ -73,7 +91,7 @@ The local release bundle retains reviewed `runtime-acceptance/nifi1.json`, `nifi
 - Exercise NiFi 2 clustering, asymmetric partitions, coordinator/ZooKeeper failure and role changes during connection setup.
 - Test representative production servers, tag types, rates, certificate policies and prolonged outages.
 - Run multi-day resource tests and native-memory profiling before making long-term leak claims.
-- Run GitHub Actions after importing the clean source snapshot and review its actual results. GitLab currently has no assigned runner; local results do not establish remote CI success.
+- Run GitHub Actions after importing the clean source snapshot and review its actual results. GitLab now has a runner; retain its successful pipeline in the release evidence as well. Local results do not establish remote CI success.
 
 The existing interactive preview was not upgraded or started collecting data during these checks; its processor remained disabled with an empty queue. Acceptance used separate disposable containers and generated identities. Neither source nor binaries have been published to GitHub.
 

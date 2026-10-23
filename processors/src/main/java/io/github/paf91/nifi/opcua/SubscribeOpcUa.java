@@ -15,6 +15,7 @@ import org.eclipse.milo.opcua.stack.core.UaExceptionStatus;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 
 import java.util.*;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.*;
@@ -48,7 +49,7 @@ import java.util.concurrent.atomic.*;
                     requiredPermission = RequiredPermission.WRITE_FILESYSTEM,
                     explanation = "Initializes and maintains the OPC UA PKI trust directory.")
         })
-public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProcessor {
+public class SubscribeOpcUa extends AbstractSessionFactoryProcessor implements VerifiableProcessor {
     private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
             new com.fasterxml.jackson.databind.ObjectMapper();
 
@@ -324,6 +325,17 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
                             + " transport reconnects automatically.",
                     "5000",
                     300000);
+    public static final PropertyDescriptor STOP_DRAIN_TIMEOUT =
+            number(
+                    "Stop Drain Timeout (ms)",
+                    "Maximum additional wait to commit buffered notifications after active tasks"
+                        + " finish and the OPC UA connection is closed. Zero disables draining."
+                        + " Backpressure or failure ends the attempt; remaining records are kept"
+                        + " for Start. Does not bound an already-running NiFi repository"
+                        + " operation.",
+                    "5000",
+                    30000,
+                    0);
     public static final Relationship SUCCESS =
             new Relationship.Builder()
                     .name("success")
@@ -362,12 +374,18 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
                     BATCH_BYTES,
                     DIAGNOSTICS_INTERVAL,
                     TIMEOUT,
-                    RETRY);
+                    RETRY,
+                    STOP_DRAIN_TIMEOUT);
     private volatile NotificationBuffer buffer;
-    private AutoCloseable connection;
+    private volatile AutoCloseable connection;
     private final Object lifecycle = new Object();
+    // Transport ownership must not wait for ProcessSession repository I/O.
+    private final Object connectionLock = new Object();
     private volatile boolean running;
     private volatile ProcessContext scheduledContext;
+    private volatile ProcessSessionFactory sessionFactory;
+    private final Object drainLock = new Object();
+    private StopDrain stopDrain;
     private volatile ConnectionAttempt attempt;
     private String bufferEndpoint;
     private String bufferSecurityPolicy;
@@ -392,7 +410,7 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
     }
 
     private volatile DiagnosticSchedule diagnosticSchedule = new DiagnosticSchedule();
-    private long nextRetry;
+    private volatile long nextRetry;
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
@@ -571,6 +589,8 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
     @OnScheduled
     public void start(ProcessContext context) throws Exception {
         synchronized (lifecycle) {
+            cancelStopDrain();
+            sessionFactory = null;
             if (buffer == null || buffer.size() == 0) {
                 initializeBuffer(context);
             } else {
@@ -601,9 +621,7 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
         if (!ownsSubscription()) {
             cancelConnection();
         } else {
-            synchronized (lifecycle) {
-                nextRetry = 0;
-            }
+            nextRetry = 0;
         }
     }
 
@@ -613,12 +631,7 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
         NotificationBuffer destination = buffer;
         return new OpcConnection(
                 settings,
-                (tag, value) ->
-                        generation.ifActive(
-                                () -> {
-                                    if (running && ownsSubscription())
-                                        accept(destination, tag, value);
-                                }),
+                (tag, value) -> accept(destination, tag, value, generation),
                 () -> generation.ifActive(() -> recovery.set(true)),
                 () ->
                         generation.ifActive(
@@ -707,18 +720,59 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
     }
 
     void accept(NotificationBuffer destination, TagDefinition tag, DataValue value) {
-        try {
-            if (!destination.offer(
-                    NotificationJson.encode(tag, value, destination.maximumRecordBytes()))) {
-                dropped.incrementAndGet();
-                totalDropped.incrementAndGet();
-            }
-        } catch (Exception e) {
-            dropped.incrementAndGet();
-            totalDropped.incrementAndGet();
-            if (isOversized(e)) oversized.incrementAndGet();
-            else encodingErrors.incrementAndGet();
+        accept(destination, tag, value, null);
+    }
+
+    void accept(
+            NotificationBuffer destination,
+            TagDefinition tag,
+            DataValue value,
+            ConnectionAttempt generation) {
+        if (generation != null && (generation.isCancelled() || !running || !ownsSubscription()))
+            return;
+        int limit = destination.encodingLimit();
+        if (limit == 0) {
+            acceptIfActive(generation, () -> recordDrop(false, false));
+            return;
         }
+        try {
+            // Encoding runs outside the cancellation monitor. Only final admission is fenced.
+            byte[] record = encodeNotification(tag, value, limit);
+            acceptIfActive(
+                    generation,
+                    () -> {
+                        if (!destination.offer(record)) recordDrop(false, false);
+                    });
+        } catch (Exception e) {
+            boolean sizeLimit = isOversized(e);
+            acceptIfActive(
+                    generation,
+                    () ->
+                            recordDrop(
+                                    sizeLimit && limit == destination.maximumRecordBytes(),
+                                    !sizeLimit));
+        }
+    }
+
+    byte[] encodeNotification(TagDefinition tag, DataValue value, int limit)
+            throws java.io.IOException {
+        return NotificationJson.encode(tag, value, limit);
+    }
+
+    private void acceptIfActive(ConnectionAttempt generation, Runnable admission) {
+        if (generation == null) admission.run();
+        else
+            generation.ifActive(
+                    () -> {
+                        if (running && ownsSubscription()) admission.run();
+                    });
+    }
+
+    private void recordDrop(boolean tooLarge, boolean encodingFailure) {
+        dropped.incrementAndGet();
+        totalDropped.incrementAndGet();
+        if (tooLarge) oversized.incrementAndGet();
+        if (encodingFailure) encodingErrors.incrementAndGet();
     }
 
     private static boolean isOversized(Throwable error) {
@@ -820,6 +874,20 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
     }
 
     @Override
+    public final void onTrigger(ProcessContext context, ProcessSessionFactory factory)
+            throws ProcessException {
+        // Retain the factory (never a session shared across threads) for stop-time delivery.
+        if (running) sessionFactory = factory;
+        ProcessSession session = factory.createSession();
+        try {
+            onTrigger(context, session);
+            session.commitAsync();
+        } catch (Throwable t) {
+            session.rollback(true);
+            throw t;
+        }
+    }
+
     public void onTrigger(ProcessContext context, ProcessSession session) throws ProcessException {
         synchronized (lifecycle) {
             if (!running || !ownsSubscription() || buffer == null) {
@@ -839,14 +907,16 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
                 closeConnection();
                 recovery.set(false);
                 ConnectionAttempt generation = new ConnectionAttempt();
-                attempt = generation;
+                synchronized (connectionLock) {
+                    attempt = generation;
+                    if (!running || !ownsSubscription()) generation.cancel();
+                }
                 diagnostics = new ConnectionDiagnostics(value -> redact(context, value));
                 connectionAttempts.incrementAndGet();
                 if (!running || !ownsSubscription()) generation.cancel();
                 try {
                     generation.check();
-                    connection = openConnection(context, generation);
-                    generation.check();
+                    publishConnection(openConnection(context, generation), generation);
                     successfulConnections.incrementAndGet();
                 } catch (Exception e) {
                     generation.cancel();
@@ -927,27 +997,12 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
                     session.transfer(diagnostic, DIAGNOSTICS);
                 }
                 if (!records.isEmpty()) {
-                    FlowFile flow = session.create();
-                    flow =
-                            session.write(
-                                    flow,
-                                    out -> {
-                                        out.write('[');
-                                        for (int i = 0; i < records.size(); i++) {
-                                            if (i > 0) out.write(',');
-                                            out.write(records.get(i));
-                                        }
-                                        out.write(']');
-                                    });
-                    Map<String, String> attributes = new HashMap<>();
-                    attributes.put("mime.type", "application/json");
-                    attributes.put("record.count", Integer.toString(records.size()));
-                    attributes.put("opcua.endpoint", bufferEndpoint);
-                    attributes.put("opcua.security.policy", bufferSecurityPolicy);
-                    attributes.put("opcua.security.mode", bufferSecurityMode);
-                    flow = session.putAllAttributes(flow, attributes);
-                    session.getProvenanceReporter().receive(flow, bufferEndpoint);
-                    session.transfer(flow, SUCCESS);
+                    NotificationBatch.write(
+                            session,
+                            records,
+                            bufferEndpoint,
+                            bufferSecurityPolicy,
+                            bufferSecurityMode);
                 }
                 session.commitAsync(
                         () -> {
@@ -985,13 +1040,15 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
     @OnStopped
     public void stop() {
         unscheduled();
-        if (buffer != null && buffer.size() > 0)
+        String outcome = drainBuffered();
+        int remaining = buffer == null ? 0 : buffer.size();
+        if (remaining > 0)
             getLogger()
                     .warn(
-                            "Stopping with {} uncommitted notifications in memory; retained for"
+                            "Stopped with {} uncommitted notifications in memory ({}); retained for"
                                 + " Start and drained before the next subscription; lost if the JVM"
-                                + " exits or processor is removed",
-                            new Object[] {buffer.size()});
+                                + " exits or processor is removed before commit",
+                            new Object[] {remaining, outcome});
         long lost = dropped.getAndSet(0);
         if (lost > 0)
             getLogger()
@@ -1000,39 +1057,106 @@ public class SubscribeOpcUa extends AbstractProcessor implements VerifiableProce
                             new Object[] {lost});
     }
 
+    private String drainBuffered() {
+        NotificationBuffer pending = buffer;
+        if (pending == null || pending.size() == 0) return "drained";
+        if (Thread.currentThread().isInterrupted()) return "stop interrupted";
+        ProcessContext context = scheduledContext;
+        if (context == null) return "no scheduled context";
+        int timeout = context.getProperty(STOP_DRAIN_TIMEOUT).asInteger();
+        if (timeout == 0) return "stop draining disabled";
+        ProcessSessionFactory factory = sessionFactory;
+        if (factory == null) return "no session factory available";
+        StopDrain drain;
+        try {
+            synchronized (drainLock) {
+                if (stopDrain != null && !stopDrain.isFinished()) {
+                    stopDrain.cancel();
+                    return "previous stop drain is still completing";
+                }
+                drain =
+                        new StopDrain(
+                                pending,
+                                factory,
+                                context,
+                                () -> !running && ownsSubscription(),
+                                context.getProperty(BATCH).asInteger(),
+                                bufferBatchBytes,
+                                bufferEndpoint,
+                                bufferSecurityPolicy,
+                                bufferSecurityMode,
+                                timeout,
+                                "opcua-stop-drain-" + getIdentifier());
+                stopDrain = drain;
+                drain.start();
+            }
+            return drain.await();
+        } catch (RuntimeException e) {
+            return "could not drain (" + e.getClass().getSimpleName() + ")";
+        }
+    }
+
+    private void cancelStopDrain() {
+        synchronized (drainLock) {
+            if (stopDrain != null) {
+                stopDrain.cancel();
+                if (stopDrain.isFinished()) stopDrain = null;
+            }
+        }
+    }
+
     private void cancelConnection() {
         ConnectionAttempt current = attempt;
         if (current != null) current.cancel();
-        synchronized (lifecycle) {
-            closeConnection();
-        }
+        closeConnection();
     }
 
     @OnRemoved
     public void removed() {
         unscheduled();
+        cancelStopDrain();
         synchronized (lifecycle) {
             buffer = null;
             bufferEndpoint = null;
             bufferSecurityPolicy = null;
             bufferSecurityMode = null;
             scheduledContext = null;
+            sessionFactory = null;
         }
     }
 
     private void closeConnection() {
-        if (attempt != null) attempt.cancel();
-        if (connection != null) {
-            try {
-                connection.close();
-            } catch (Exception e) {
-                getLogger()
-                        .warn(
-                                "OPC UA connection cleanup failed ({})",
-                                new Object[] {e.getClass().getSimpleName()});
-            } finally {
-                connection = null;
+        synchronized (connectionLock) {
+            if (attempt != null) attempt.cancel();
+            AutoCloseable owned = connection;
+            connection = null;
+            closeResource(owned);
+        }
+    }
+
+    private void publishConnection(AutoCloseable opened, ConnectionAttempt generation) {
+        synchronized (connectionLock) {
+            if (attempt != generation
+                    || generation.isCancelled()
+                    || !running
+                    || !ownsSubscription()) {
+                generation.cancel();
+                closeResource(opened);
+                throw new CancellationException("OPC UA connection cancelled before publication");
             }
+            connection = opened;
+        }
+    }
+
+    private void closeResource(AutoCloseable owned) {
+        if (owned == null) return;
+        try {
+            owned.close();
+        } catch (Exception e) {
+            getLogger()
+                    .warn(
+                            "OPC UA connection cleanup failed ({})",
+                            new Object[] {e.getClass().getSimpleName()});
         }
     }
 }

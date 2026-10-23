@@ -2,6 +2,8 @@
 package io.github.paf91.nifi.opcua;
 
 import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /** Peek before commit: callbacks can append, but cannot evict an uncommitted batch. */
 final class NotificationBuffer {
@@ -40,6 +42,12 @@ final class NotificationBuffer {
         return true;
     }
 
+    /** A cheap admission snapshot; offer still enforces both limits atomically. */
+    synchronized int encodingLimit() {
+        if (queue.size() >= capacity) return 0;
+        return (int) Math.min(maximumRecordBytes, byteCapacity - bytes);
+    }
+
     synchronized List<byte[]> peek(int maximum) {
         List<byte[]> batch = new ArrayList<>();
         for (byte[] item : queue) {
@@ -69,6 +77,7 @@ final class NotificationBuffer {
 
     synchronized void release() {
         reserved = false;
+        notifyAll();
     }
 
     synchronized void acknowledge(int count) {
@@ -76,6 +85,16 @@ final class NotificationBuffer {
             throw new IllegalArgumentException("Invalid acknowledgement count");
         for (int i = 0; i < count; i++) bytes -= queue.removeFirst().length;
         reserved = false;
+        notifyAll();
+    }
+
+    /** Wait only for the previous batch's outcome; never steal an in-flight reservation. */
+    synchronized void awaitAvailable(long deadline) throws InterruptedException, TimeoutException {
+        while (reserved) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) throw new TimeoutException();
+            TimeUnit.NANOSECONDS.timedWait(this, remaining);
+        }
     }
 
     synchronized int size() {

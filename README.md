@@ -20,7 +20,7 @@ This is an independent community project, not an Apache Software Foundation prod
 | Legacy (default) | 1.23.2 | 8 | 0.6.16 | `mvn clean verify` |
 | Modern | 2.12.0 | 21 | 1.1.8 | `mvn -Pnifi2 -Dnifi.version=2.12.0 clean verify` |
 
-**Version 1.0.2 is in preparation.** It adds configurable server certificate validation, bounds NiFi 2 monitored-item setup waits, stops later batches after cancellation, and preserves patch versions in release archive names. See the [changelog](CHANGELOG.md) and [validation record](docs/validation.md) for completed checks and outstanding release validation. Each release bundle records results for its exact NAR hashes.
+**Version 1.0.4** adds a bounded attempt to drain received notifications on Stop, reduces scalar encoding and diagnostic allocations, and expands GitLab checks before GitHub publication. It includes the 1.0.3 memory/cancellation fixes and ExtensionObject output migration; see [output](docs/output.md), [changelog](CHANGELOG.md), and the [validation record](docs/validation.md). Release evidence identifies the exact source commit and NAR hashes.
 
 Preview 5 passed both Maven suites and standalone real-NiFi smoke tests, including encrypted authentication and username/password without client certificates. Historical Preview 4 binaries also passed a 1,000-tag, 30-minute load phase and legacy two-node failover. Those older load/cluster results do not certify newer binaries. NiFi 2 clustering, multi-day resource testing and representative production-server acceptance remain outstanding.
 
@@ -32,14 +32,14 @@ Requirements: Maven 3.9.11, JDK 8 for the legacy build or JDK 21 for the modern 
 
 ```sh
 mvn -B -ntp clean verify
-python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.2.nar 52
+python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-1.23.2-1.0.4.nar 52
 ```
 
 For NiFi 2, use JDK 21:
 
 ```sh
 mvn -B -ntp -Pnifi2 -Dnifi.version=2.12.0 clean verify
-python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.2.nar 65
+python3 scripts/verify-nar.py nar/target/nifi-opcua-subscriber-2.12.0-1.0.4.nar 65
 ```
 
 Always clean when changing profiles. Copy the first artifact elsewhere before building the second; `clean` removes previous output. Dependencies are bundled in the NAR; no separate Milo installation is needed.
@@ -74,7 +74,7 @@ Follow the [demo guide](docs/demo.md) to launch NiFi at **http://localhost:18080
 
 ## Delivery limits
 
-Notifications first enter a bounded memory buffer. Stop/Start in the same JVM retains pending data, but JVM restart/crash does not. A full buffer drops newest values. Failover can produce gaps or duplicates; buffers are local to each node. This processor does not recover history or promise exactly-once delivery. See the [delivery contract](docs/output.md).
+Notifications first enter a bounded memory buffer. Stop closes ingress and tries to commit buffered data for up to five additional seconds by default. Backpressure, failure or expiry ends draining; uncommitted records remain available for Start in the same JVM. JVM restart/crash loses the memory queue. A full buffer drops newest values. Failover can produce gaps or duplicates; buffers are local to each node. This processor does not recover history or promise exactly-once delivery. See the [delivery contract](docs/output.md).
 
 ## Documentation
 

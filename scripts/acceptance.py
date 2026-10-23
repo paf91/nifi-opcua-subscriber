@@ -226,7 +226,94 @@ class Harness:
         self.save()
         return sample
 
+    def stopped(self, processor):
+        entity = self.api(self.node, 'GET', '/processors/' + processor)
+        return (entity['component']['state'] == 'STOPPED'
+                and entity['status']['aggregateSnapshot']['activeThreadCount'] == 0)
+
+    def configure_source_period(self, period):
+        entity = self.api(self.node, 'GET', '/processors/' + self.source)
+        self.api(self.node, 'PUT', '/processors/' + self.source,
+                 {'revision': entity['revision'], 'component': {
+                     'id': self.source, 'config': {'schedulingPeriod': period,
+                         'properties': {'Stop Drain Timeout (ms)': '5000'}}}})
+
+    def queue_count_now(self):
+        # A fresh listing avoids the periodic status cache when comparing stop-time delivery.
+        base = '/flowfile-queues/' + self.connection
+        request = self.api(self.node, 'POST', base + '/listing-requests')['listingRequest']
+        lid = request['id']
+        try:
+            listing = self.wait('fresh stop-test queue listing', lambda: self._listing(base, lid))
+            rows = listing['flowFileSummaries']
+            assert len(rows) < 100, 'Stop test must not compare truncated listings'
+            return len(rows)
+        finally:
+            self.api(self.node, 'DELETE', base + '/listing-requests/' + lid)
+
+    def stop_warnings(self):
+        board = self.api(self.node, 'GET', '/flow/bulletin-board?sourceId=' + self.source)
+        result = {}
+        for entry in board['bulletinBoard']['bulletins']:
+            bulletin = entry['bulletin']
+            if (bulletin.get('sourceId') == self.source
+                    and 'Stopped with ' in bulletin.get('message', '')
+                    and 'uncommitted notifications' in bulletin['message']):
+                key = (bulletin.get('nodeAddress'), bulletin['id'])
+                result[key] = bulletin['message']
+        return result
+
+    def graceful_stop(self):
+        self.state(self.source, 'STOPPED')
+        self.wait('source stopped before drain test', lambda: self.stopped(self.source), 15)
+        self.wait('old subscription closed', lambda: self.metrics()['subscriptions'] == 0)
+        self.wait('old output drained', lambda: self.queued() == 0)
+        self.state(self.sink, 'STOPPED')
+        self.wait('sink stopped before drain test', lambda: self.stopped(self.sink), 15)
+        self.configure_source_period('30 sec')
+        prior_warnings = self.stop_warnings()
+        started = time.monotonic()
+        self.state(self.source, 'RUNNING')
+        self.wait('subscription ready for buffered stop', lambda: self.metrics()['subscriptions'] == 1)
+        self.wait('first trigger returned', lambda: self.api(self.node, 'GET', '/processors/' + self.source)
+                  ['status']['aggregateSnapshot']['activeThreadCount'] == 0)
+        time.sleep(2.5)  # Receive updates without another scheduled trigger draining the buffer.
+        before = self.queue_count_now()
+        assert time.monotonic() - started < 20, 'Setup took too long to isolate the final drain'
+        stopped_at = time.monotonic()
+        self.state(self.source, 'STOPPED')
+        self.wait('bounded graceful stop', lambda: self.stopped(self.source), 15)
+        duration = time.monotonic() - stopped_at
+        self.wait('subscription closed before drained stop', lambda: self.metrics()['subscriptions'] == 0)
+        after = self.queue_count_now()
+        assert after > before, 'Stop did not commit buffered notifications between scheduled triggers'
+        warnings = self.stop_warnings()
+        assert not set(warnings) - set(prior_warnings), 'Healthy stop emitted an uncommitted-data warning'
+        self.check('graceful-stop-drained', {'seconds': duration, 'queuedBefore': before, 'queuedAfter': after})
+
+        self.configure_source_period('100 ms')
+        self.state(self.source, 'RUNNING')
+        self.wait('backpressure before stop', lambda: self.queued() >= 10)
+        time.sleep(2.5)
+        prior_warnings = self.stop_warnings()
+        stopped_at = time.monotonic()
+        self.state(self.source, 'STOPPED')
+        self.wait('stop despite backpressure', lambda: self.stopped(self.source), 15)
+        duration = time.monotonic() - stopped_at
+        self.wait('subscription closed under backpressure', lambda: self.metrics()['subscriptions'] == 0)
+        def retained_warning():
+            warnings = self.stop_warnings()
+            return any('backpressured' in message for key, message in warnings.items() if key not in prior_warnings)
+        self.wait('retained-data warning after blocked drain', retained_warning, 15)
+        self.check('backpressured-stop-bounded', {'seconds': duration})
+        self.state(self.sink, 'RUNNING')
+        self.wait('output available after blocked drain', lambda: self.queued() == 0)
+        self.state(self.source, 'RUNNING')
+        self.wait('subscription restored after retained drain', lambda: self.metrics()['subscriptions'] == 1)
+        self.delivery_progress('delivery-after-stop-drain')
+
     def exercise(self):
+        self.graceful_stop()
         self.snapshot('baseline')
         self.state(self.sink, 'STOPPED')
         self.wait('backpressure reached', lambda: self.queued() >= 10)
